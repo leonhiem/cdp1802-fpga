@@ -1,6 +1,14 @@
-# cdp1802
+# cdp1802-fpga
 
-A reverse-engineered VHDL model of the RCA CDP1802 COSMAC microprocessor.
+An FPGA port of [cdp1802](https://github.com/leonhiem/cdp1802), a
+reverse-engineered VHDL model of the RCA CDP1802 COSMAC microprocessor.
+
+This repo starts as a straight import of `cdp1802` (full history carried
+over) at the point where its bus behavior was captured as a golden
+reference trace (`sim/ghdl/reference/`, cross-checked against Vivado
+xsim). That reference is the regression baseline for this port: any
+FPGA-driven change here should still reproduce it, verified with
+`sim/ghdl/run.sh` / `sim/xsim/run.sh`.
 
 ## Overview
 
@@ -114,7 +122,6 @@ MIT
 
 ## Status
 
-This repository is now frozen as the reference/golden-model snapshot of
-the design prior to its FPGA port: `sim/ghdl/reference/` and the GHDL/xsim
-flows above exist to let that port be verified against this exact
-behavior. Active development continues in `cdp1802-fpga` from here on.
+This is where active development now happens. `cdp1802` stays as the
+frozen pre-FPGA reference; FPGA-specific work (board top-levels,
+constraints, synthesis/implementation flows) lands here as it's added.
