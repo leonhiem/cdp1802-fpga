@@ -77,6 +77,9 @@ BEGIN
   END PROCESS;
 
   -- connect
-  q <= r.ff WHEN rd = '1' ELSE 'Z';
+  -- FPGA note: 'rd' is never driven low anywhere this is instantiated
+  -- (no other driver ever shares q), so this stays a plain
+  -- single-driver mux rather than a tri-state -- no internal 'Z'.
+  q <= r.ff WHEN rd = '1' ELSE '0';
 
 END str;

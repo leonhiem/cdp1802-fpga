@@ -28,7 +28,11 @@ ENTITY cs1800_cpu IS
     nINT     : IN    STD_LOGIC;
     nEF      : IN    STD_LOGIC_VECTOR(2 DOWNTO 0);
     ADDR     : OUT   STD_LOGIC_VECTOR(7 DOWNTO 0);
-    DATA     : INOUT STD_LOGIC_VECTOR(7 DOWNTO 0);
+    -- FPGA note: see cdp1802.vhd -- split from INOUT into an explicit
+    -- in/out/output-enable triplet, passed straight through here.
+    DATA_IN  : IN    STD_LOGIC_VECTOR(7 DOWNTO 0);
+    DATA_OUT : OUT   STD_LOGIC_VECTOR(7 DOWNTO 0);
+    DATA_OE  : OUT   STD_LOGIC;
     N        : OUT   STD_LOGIC_VECTOR(2 DOWNTO 0);
     TPA      : OUT   STD_LOGIC;
     TPB      : OUT   STD_LOGIC;
@@ -160,7 +164,9 @@ BEGIN
     Q        => Q_i,
     SC       => SC,
     nMRD     => nMRD,
-    DATA     => DATA,
+    DATA_IN  => DATA_IN,
+    DATA_OUT => DATA_OUT,
+    DATA_OE  => DATA_OE,
     N        => N,
     nEF      => nEF_i,
     ADDR     => ADDR,

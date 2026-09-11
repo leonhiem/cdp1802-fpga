@@ -32,7 +32,14 @@ ARCHITECTURE tb OF tb_cdp1802 IS
   SIGNAL Q      : STD_LOGIC;
   SIGNAL SC     : STD_LOGIC_VECTOR(1 DOWNTO 0);
   SIGNAL nMRD   : STD_LOGIC;
-  SIGNAL DATA   : STD_LOGIC_VECTOR(7 DOWNTO 0);
+  -- cdp1802's DATA is now an IN/OUT/OE triplet (see cdp1802.vhd). This
+  -- testbench has no memory model attached, so mimic "nothing else on
+  -- the bus" the same way the real inout net behaved: read back our own
+  -- driven value while driving, float otherwise. 'Z' is fine here --
+  -- this is verification-only code, never synthesized.
+  SIGNAL DATA_IN  : STD_LOGIC_VECTOR(7 DOWNTO 0);
+  SIGNAL DATA_OUT : STD_LOGIC_VECTOR(7 DOWNTO 0);
+  SIGNAL DATA_OE  : STD_LOGIC;
   SIGNAL N      : STD_LOGIC_VECTOR(2 DOWNTO 0);
   SIGNAL nEF    : STD_LOGIC_VECTOR(3 DOWNTO 0) := "1111";
   SIGNAL ADDR   : STD_LOGIC_VECTOR(7 DOWNTO 0);
@@ -47,6 +54,8 @@ BEGIN
 
   clk <= NOT clk OR tb_end AFTER clk_period/2;
   --rst <= '1', '0' AFTER clk_period*3;
+
+  DATA_IN <= DATA_OUT WHEN DATA_OE = '1' ELSE (OTHERS => 'Z');
 
   -- run 1 us
   p_in_stimuli : PROCESS
@@ -115,7 +124,9 @@ BEGIN
     Q        => Q,
     SC       => SC,
     nMRD     => nMRD,
-    DATA     => DATA,
+    DATA_IN  => DATA_IN,
+    DATA_OUT => DATA_OUT,
+    DATA_OE  => DATA_OE,
     N        => N,
     nEF      => nEF,
     ADDR     => ADDR,

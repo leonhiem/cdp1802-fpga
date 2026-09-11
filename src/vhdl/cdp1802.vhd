@@ -27,7 +27,13 @@ ENTITY cdp1802 IS
     Q        : OUT   STD_LOGIC;
     SC       : OUT   STD_LOGIC_VECTOR(1 DOWNTO 0);
     nMRD     : OUT   STD_LOGIC;
-    DATA     : INOUT STD_LOGIC_VECTOR(7 DOWNTO 0);
+    -- FPGA note: split from a single INOUT 'DATA' pin into an explicit
+    -- in/out/output-enable triplet -- no internal 'Z'. This is purely
+    -- internal wiring in cdp18.vhd/cs1800.vhd (never a real chip pin
+    -- there), so the parent does the actual bus merge.
+    DATA_IN  : IN    STD_LOGIC_VECTOR(7 DOWNTO 0);
+    DATA_OUT : OUT   STD_LOGIC_VECTOR(7 DOWNTO 0);
+    DATA_OE  : OUT   STD_LOGIC;
     N        : OUT   STD_LOGIC_VECTOR(2 DOWNTO 0);
     nEF      : IN    STD_LOGIC_VECTOR(3 DOWNTO 0);
     ADDR     : OUT   STD_LOGIC_VECTOR(7 DOWNTO 0);
@@ -86,6 +92,8 @@ ARCHITECTURE str OF cdp1802 IS
   SIGNAL wr_D      : STD_LOGIC;
   SIGNAL rd_D      : STD_LOGIC;
   SIGNAL D_in      : STD_LOGIC_VECTOR(7 DOWNTO 0);
+  SIGNAL D_in_amux : STD_LOGIC_VECTOR(7 DOWNTO 0); -- D_in candidate: A-register byte
+  SIGNAL D_in_dmux : STD_LOGIC_VECTOR(7 DOWNTO 0); -- D_in candidate: external bus (DATA_IN)
   SIGNAL D_out     : STD_LOGIC_VECTOR(7 DOWNTO 0);
   SIGNAL alu_in    : STD_LOGIC_VECTOR(7 DOWNTO 0);
   SIGNAL alu_out   : STD_LOGIC_VECTOR(7 DOWNTO 0);
@@ -381,19 +389,28 @@ BEGIN
     selA    => addr_lohi,
     outputA => ADDR,
     selD    => A_sel_lohi,
-    outputD => D_in
+    outputD => D_in_amux
   );
 
   u_dmux_D : ENTITY work.dmux
   PORT MAP (
-    float0  => float_DATA,
-    float1  => float_T,
-    rst     => reset_DATA,
-    d_src0  => D_out, 
-    d_src1  => T_out, 
-    d_snk   => D_in,
-    data    => DATA
+    float0   => float_DATA,
+    float1   => float_T,
+    rst      => reset_DATA,
+    d_src0   => D_out,
+    d_src1   => T_out,
+    d_snk    => D_in_dmux,
+    data_in  => DATA_IN,
+    data_out => DATA_OUT,
+    data_oe  => DATA_OE
   );
+
+  -- D_in used to be driven directly by both amux and dmux (resolved via
+  -- tri-state 'Z': whichever one wasn't selected floated). The two are
+  -- mutually exclusive by construction -- selD picks the A-register
+  -- byte path, otherwise D_in comes from the external bus -- so this is
+  -- now one explicit mux instead of a two-driver resolved signal.
+  D_in <= D_in_amux WHEN (A_sel_lohi = "01" OR A_sel_lohi = "10") ELSE D_in_dmux;
 
   u_alu : ENTITY work.alu
   PORT MAP (

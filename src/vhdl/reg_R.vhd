@@ -82,15 +82,18 @@ BEGIN
 
 
 
+  -- FPGA note: 'rd' is never driven low in this design (no other driver
+  -- ever shares d_out), so this stays a plain address-indexed mux rather
+  -- than a tri-state -- no internal 'Z'.
   p_regR_rd : PROCESS(rd, addr, r)
       VARIABLE addr_natural : NATURAL RANGE 0 TO 15;
   BEGIN
       addr_natural := to_integer(unsigned(addr));
       IF rd = '1' THEN
-          d_out <= r.reg(addr_natural);	
-			ELSE
-          d_out <= (OTHERS => 'Z');
-      END IF;	   
+          d_out <= r.reg(addr_natural);
+      ELSE
+          d_out <= (OTHERS => '0');
+      END IF;
   END PROCESS;
 
 END str;

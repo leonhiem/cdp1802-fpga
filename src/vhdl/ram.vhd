@@ -22,7 +22,12 @@ USE work.instr_pkg.ALL;
 ENTITY ram IS
   PORT (
     address : IN STD_LOGIC_VECTOR(15 DOWNTO 0);
-    data    : INOUT STD_LOGIC_VECTOR(7 DOWNTO 0);
+    -- FPGA note: split from a single INOUT 'data' pin into separate
+    -- write-data-in / read-data-out signals -- no internal 'Z'. The
+    -- parent (cdp18.vhd/cs1800.vhd) merges data_out with whatever else
+    -- shares the system bus.
+    data_in  : IN  STD_LOGIC_VECTOR(7 DOWNTO 0);
+    data_out : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
     nWE, nCS, nOE: IN STD_LOGIC
   );
 END ram;
@@ -404,19 +409,19 @@ SIGNAL ram1 : ram_type:= (
 );
 
 BEGIN
-  PROCESS (address, nCS, nWE, nOE) IS
+  PROCESS (address, nCS, nWE, nOE, data_in) IS
     BEGIN
-      data <= (OTHERS => 'Z'); -- chip is not selected
+      data_out <= (OTHERS => '0'); -- chip is not selected
       IF (nCS = '0') THEN
         IF nWE = '0' THEN -- write
-          ram1(to_integer(unsigned(address))) <= data;
+          ram1(to_integer(unsigned(address))) <= data_in;
         END IF;
 
         IF nWE = '1' AND nOE = '0' THEN -- read
-          data <= ram1(to_integer(unsigned(address)));
+          data_out <= ram1(to_integer(unsigned(address)));
         ELSE
-          data <= (OTHERS => 'Z');
+          data_out <= (OTHERS => '0');
         END IF;
       END IF;
-  END PROCESS; 
+  END PROCESS;
 END str;

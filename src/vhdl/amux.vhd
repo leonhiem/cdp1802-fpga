@@ -36,13 +36,17 @@ ARCHITECTURE str OF amux IS
 BEGIN
 
   -- Connection to Addressbus:
+  -- selA is a plain 2-valued select, so this is already an exhaustive
+  -- 2-way mux -- no default/'Z' branch needed.
   outputA <= input(7 DOWNTO 0) WHEN selA = '0' ELSE
-             input(15 DOWNTO 8) WHEN selA = '1' ELSE
-				 (OTHERS => 'Z');
+             input(15 DOWNTO 8);
 
   -- Connection to Databus:
+  -- outputD only matters to the caller when selD selects one of these
+  -- two cases (see cdp1802.vhd's D_in mux); the default is a defined
+  -- don't-care rather than a float.
   outputD <= input(7 DOWNTO 0) WHEN selD = "01" ELSE
              input(15 DOWNTO 8) WHEN selD = "10" ELSE
-             (OTHERS => 'Z');
+             (OTHERS => '0');
 
 END str;

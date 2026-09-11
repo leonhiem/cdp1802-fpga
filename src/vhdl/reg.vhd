@@ -77,6 +77,9 @@ BEGIN
   END PROCESS;
 
   -- connect
-  d_out <= r.reg WHEN rd = '1' ELSE (OTHERS => 'Z');
+  -- FPGA note: 'rd' is never driven low anywhere this is instantiated
+  -- (no other driver ever shares d_out), so this stays a plain
+  -- single-driver mux rather than a tri-state -- no internal 'Z'.
+  d_out <= r.reg WHEN rd = '1' ELSE (OTHERS => '0');
 
 END str;

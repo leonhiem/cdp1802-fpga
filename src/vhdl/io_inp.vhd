@@ -29,5 +29,8 @@ END io_inp;
 ARCHITECTURE str OF io_inp IS
 
 BEGIN
-  data <= input WHEN nCS = '0' ELSE (OTHERS => 'Z');
+  -- FPGA note: driven value is 0 when not selected, so the parent that
+  -- shares this bus (cdp18.vhd/cs1800.vhd) can OR-merge it with the
+  -- other drivers instead of relying on tri-state resolution.
+  data <= input WHEN nCS = '0' ELSE (OTHERS => '0');
 END str;

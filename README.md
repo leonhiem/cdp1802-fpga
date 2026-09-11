@@ -116,6 +116,28 @@ Runs the same testbenches on Vivado's simulator and diffs the result
 against `sim/ghdl/reference/` — confirmed bit-for-bit identical on both
 designs (Vivado 2024.1). See `sim/xsim/README.md`.
 
+## FPGA porting notes
+
+### Removing internal tri-states
+
+The original design used `std_logic`'s resolved-signal semantics to model
+shared buses -- several drivers on one signal, each outputting `(others =>
+'Z')` when not selected -- mirroring how the real CDP1802 die's internal
+buses work. That simulates fine, but FPGA fabric (Xilinx 7-series/Zynq and
+Intel alike) has no internal tri-state routing resource, only real chip
+pins do. Every `'Z'` in `src/vhdl/` has been replaced with an explicit mux
+or a defined `'0'` default, verified against the golden reference trace
+(see `sim/ghdl/README.md`): the only change in either trace is `data`
+going from `ZZ` to `00` on cycles where nothing was driving the bus --
+every other field, on every other row, is byte-for-byte identical.
+
+As part of this, `cdp1802`'s `DATA` port changed from a single `INOUT` pin
+to an explicit `DATA_IN`/`DATA_OUT`/`DATA_OE` triplet -- the standard,
+vendor-independent way to represent a bidirectional pin once it's purely
+internal wiring. Neither `cdp18` nor `cs1800` ever expose `DATA` at their
+own boundary, so this doesn't touch either system's external interface;
+`cs1800_cpu.vhd`, which does re-expose `DATA`, carries the same triplet.
+
 ## License
 
 MIT
