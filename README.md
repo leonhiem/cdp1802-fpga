@@ -2,13 +2,16 @@
 
 An FPGA port of [cdp1802](https://github.com/leonhiem/cdp1802), a
 reverse-engineered VHDL model of the RCA CDP1802 COSMAC microprocessor.
+Proven on real hardware: a program written from Linux userspace over AXI
+(not baked into the bitstream) has run correctly on a Zynq-7000 board --
+see `boards/cora-z7-07s/BRINGUP_LOG.md` for the full account.
 
-This repo starts as a straight import of `cdp1802` (full history carried
+This repo started as a straight import of `cdp1802` (full history carried
 over) at the point where its bus behavior was captured as a golden
 reference trace (`sim/ghdl/reference/`, cross-checked against Vivado
-xsim). That reference is the regression baseline for this port: any
-FPGA-driven change here should still reproduce it, verified with
-`sim/ghdl/run.sh` / `sim/xsim/run.sh`.
+xsim). That reference is the regression baseline for every change made
+here: it should still be reproduced (or the difference explained and
+verified) after any edit, checked with `sim/ghdl/run.sh` / `sim/xsim/run.sh`.
 
 ## Overview
 
@@ -27,94 +30,184 @@ All pins are implemented per the datasheet, except the XTAL pin.
 - User manual: http://bitsavers.trailing-edge.com/components/rca/cosmac/MPM-201A_User_Manual_for_the_CDP1802_COSMAC_Microprocessor_1976.pdf
 - See also: http://www.cosmacelf.com/
 
+## Getting started
+
+A step-by-step path from a fresh clone to (optionally) a program you wrote
+running on real hardware. Each step only needs what the previous one
+needed, so stop wherever suits you -- the GHDL step alone requires no
+Xilinx tools and no hardware at all.
+
+### Prerequisites
+
+- **GHDL** with VHDL-2008 support (tested with GHDL 4.1.0, mcode backend).
+  This is the fast, everyday simulator -- no license, no GUI.
+- **Xilinx Vivado 2024.1** (or close to it), for the Vivado Simulator
+  (`xsim`) cross-check and for anything under `boards/`. Needed only from
+  step 3 onward.
+- For the Cora Z7-07S hardware steps specifically: a Digilent Cora Z7-07S
+  board with a Linux image on its SD card (this was built against a
+  PetaLinux 2017.4 image) reachable over USB (JTAG + UART) and/or Ethernet;
+  and the [Digilent board files](https://github.com/Digilent/vivado-boards)
+  cloned locally with Vivado's `board.repoPaths` pointed at their
+  `new/board_files` directory (e.g. in `~/.Xilinx/Vivado/init.tcl`):
+  ```tcl
+  set_param board.repoPaths [list "/path/to/vivado-boards/new/board_files"]
+  ```
+
+### 1. Clone
+
+```
+git clone git@github.com:leonhiem/cdp1802-fpga.git
+cd cdp1802-fpga
+```
+
+### 2. Run the GHDL simulation
+
+```
+sim/ghdl/run.sh
+```
+
+This analyzes, elaborates, and runs `tb_cdp18_dump` and `tb_cs1800_dump`
+(a few hundred microseconds of simulated CDP1802 execution each, done in
+well under a second), and writes their bus traces into
+`sim/ghdl/reference/`. Those files are already committed as the golden
+reference, so on an unmodified checkout this is a no-op: `git status`
+should show nothing changed. That's the actual point of the script --
+after editing anything under `src/vhdl/`, re-run it and `git diff
+sim/ghdl/reference/` to see exactly what changed, if anything. See
+`sim/ghdl/README.md` for the trace format.
+
+### 3. Cross-check with Vivado xsim
+
+```
+source <Vivado install>/2024.1/settings64.sh   # puts xvhdl/xelab/xsim on PATH
+sim/xsim/run.sh
+```
+
+Runs the same testbenches on Vivado's simulator and diffs the result
+against `sim/ghdl/reference/`, printing `PASS`/`FAIL`. Confirmed
+bit-for-bit identical on both designs. See `sim/xsim/README.md`.
+
+### 4. Build and run on the Cora Z7-07S
+
+Everything below lives under `boards/cora-z7-07s/`; its own `README.md`
+and `BRINGUP_LOG.md` have the full reference and the story of what was
+found along the way. This is the condensed, do-it-now version.
+
+**Build the project and bitstream** (a few minutes; creates the actual
+Vivado project as a sibling directory, `~/fpga/cs1800_bringup`, not inside
+this repo -- Vivado project trees are build output, regenerated from this
+script, not version-controlled):
+```
+source <Vivado install>/2024.1/settings64.sh
+vivado -mode batch -source boards/cora-z7-07s/build_project.tcl
+```
+
+**Program the board** (needs it connected over USB):
+```
+vivado -mode batch -source boards/cora-z7-07s/program.tcl
+```
+
+**Control it.** The design exposes two memory-mapped regions to the ARM
+cores, both `devmem`-accessible from Linux on the board:
+
+| Address | What |
+|---|---|
+| `0x4120_0000` | control (write) / status (read) byte -- see table below |
+| `0x4000_0000` | the CDP1802's RAM (4KB), for loading a program |
+
+Control byte, at `0x4120_0000` (defaults to `0x01` on power-up, holding
+the CPU in reset so its RAM's write access starts out belonging to
+software, not the CPU):
+
+| bit | meaning |
+|---|---|
+| 0 | `reset` (also selects who may write the RAM: `1`=software, `0`=the CPU) |
+| 1 | `halt` |
+| 3 | `run` |
+| 6:4 | `nEF(2:0)` (external flag inputs) |
+
+Status byte, at `0x4120_0008`: bit 0 = `Q`, bit 1 = `LC`.
+
+**Load and run a program**, from a shell on the board (while `reset` is
+still asserted, i.e. right after power-up, before writing anything else
+to the control byte):
+```
+devmem 0x40000000 32 0x0001307B   # example: SEQ (sets Q=1), then BR back to itself
+devmem 0x41200000 32 0x68         # reset=0, run=1, nEF="110"
+devmem 0x41200008                 # read status back -- bit 0 (Q) should be 1
+```
+Programs are loaded 32 bits (4 bytes) at a time, little-endian: the byte
+at the lowest address goes in bits 7:0 of the word.
+
 ## Repository layout
 
 ```
-src/vhdl/     the CPU and example systems around it
-tb/vhdl/      testbenches
-sim/ghdl/     GHDL simulation flow + committed golden reference trace
-sim/xsim/     Vivado xsim cross-check against that same golden trace
-doc/          original design sketches and simulation screenshots
+src/vhdl/              the CPU and example systems around it
+tb/vhdl/               testbenches
+sim/ghdl/              GHDL simulation flow + committed golden reference trace
+sim/xsim/              Vivado xsim cross-check against that same golden trace
+boards/cora-z7-07s/    Zynq board bring-up: block design, RTL glue, hardware log
+doc/                   original design sketches and simulation screenshots
 ```
 
 ### `src/vhdl/`
 
 | File | Role |
 |---|---|
-| `cdp1802.vhd` | Top-level CDP1802 entity: every datasheet pin. |
+| `cdp1802.vhd` | Top-level CDP1802 entity: every datasheet pin (`DATA` is an `IN`/`OUT`/output-enable triplet, not a single `INOUT` pin -- see "FPGA porting notes" below). |
 | `control.vhd` | Main state machine: fetch/execute/DMA/interrupt sequencing, TPA/TPB. |
 | `instr.vhd` | Instruction decoder/micro-sequencer for the full opcode map. |
 | `instr_pkg.vhd` | Opcode encodings for every CDP1802 mnemonic (incl. aliases like `BDF`/`BGE`/`BPZ`). |
+| `test_program_pkg.vhd` | The instruction sequence exercising most of the instruction set, shared by `ram.vhd` and the board's `shared_ram.vhd` so there's one copy to keep in sync, not several. |
 | `alu.vhd`, `amux.vhd`, `dmux.vhd` | Datapath: ALU, address mux, data mux (see `doc/dmux_alu_D_.jpg` for the original design sketch). |
 | `reg.vhd`, `reg_R.vhd`, `ff.vhd`, `dff.vhd` | Register file and flip-flop primitives. |
 | `cdp1802_pkg.vhd` | Shared state-machine and ALU-operation encodings. |
 | `cdp18.vhd` | Example system: CDP1802 + RAM + simple I/O, driven directly by the datasheet pins (`nWAIT`, `nCLEAR`, `nINT`, `nDMA_IN`/`OUT`). |
-| `cs1800.vhd`, `cs1800_cpu.vhd` | A second top-level wrapper around the same core, driven by simpler system control lines (`reset`/`halt`/`single`/`run`) instead of the raw datasheet handshake; this variant has already been run through Intel Quartus once. |
-| `ram.vhd` | RAM containing a small embedded test program that exercises most instructions. |
+| `cs1800.vhd`, `cs1800_cpu.vhd` | A second top-level wrapper around the same core, driven by simpler system control lines (`reset`/`halt`/`single`/`run`) instead of the raw datasheet handshake, and matching the real backplane in one more way: `cs1800.vhd`'s RAM is external (its own ports, not an internal instance), since on the real rack RAM lives on separate cards from the CPU card. This variant has already been run through Intel Quartus once, and is the one proven end-to-end on the Cora Z7-07S. |
+| `ram.vhd` | Single-port RAM (used by `cdp18.vhd`, and externally by `cs1800`'s own testbenches), pre-loaded from `test_program_pkg.vhd`. |
 | `io_inp.vhd`, `io_out.vhd` | Minimal input/output port models. |
 
 ### `tb/vhdl/`
 
 - `tb_cdp1802.vhd`, `tb_reg_R.vhd` — unit-level testbenches.
 - `tb_cdp18.vhd`, `tb_cs1800.vhd` — system-level testbenches: drive reset,
-  run, pause, interrupt and DMA sequences against `cdp18` / `cs1800`.
+  run, pause, interrupt and DMA sequences against `cdp18` / `cs1800`
+  (`tb_cs1800.vhd` wires up an external `ram.vhd` instance, matching how
+  `cs1800.vhd`'s RAM is no longer internal).
 - `tb_cdp18_dump.vhd`, `tb_cs1800_dump.vhd` — the same stimulus, plus a
   monitor that records `{ram_addr, data, nMRD, nMWR, Q, SC}` on every TPB
   pulse to a text file, without modifying any existing design or
   testbench file (VHDL-2008 external names reach into the DUT). Used by
   `sim/ghdl/` and `sim/xsim/` below.
 
+### `boards/cora-z7-07s/`
+
+The Zynq board bring-up: `hdl/cs1800_top.vhd` (the board-specific
+top-level, wrapping `cs1800` with a control/status interface and the RAM
+it now needs externally) and `hdl/shared_ram.vhd` (that RAM: one port for
+the CPU, one for Linux to load programs through), `build_project.tcl` /
+`program.tcl` (build and program the Vivado project), and its own
+`sim/run.sh` regression. See its `README.md` for the full design
+reference and `BRINGUP_LOG.md` for the hardware bring-up log, including
+two real bugs found only by testing on real silicon.
+
 ## Implementation status
 
 - The full CDP1802 instruction set is implemented (`instr_pkg.vhd` defines
   261 opcode constants, covering every mnemonic and its aliases); 74 of
-  them are marked `-- tested` against the `ram.vhd` test program.
+  them are marked `-- tested` against `test_program_pkg.vhd`'s test
+  program.
 - The S0/S1/S2/S3 fetch/execute/DMA/interrupt cycle and TPA/TPB timing are
   implemented per the datasheet.
 - No outstanding `TODO`/`FIXME` markers in the source.
-
-## Simulating
-
-### ModelSim (original workflow)
-
-```
-modelsim_config unb2c -v1
-run_modelsim unb2c
-```
-In ModelSim:
-```
-lp cdp1802
-mk clean
-mk all
-```
-Double click testbench `tb_cdp18.vhd` or `tb_cs1800.vhd`, then:
-```
-as 10
-run 1200us
-```
-Exit with `quit -sim`.
-
-### GHDL
-
-```
-sim/ghdl/run.sh            # both designs
-sim/ghdl/run.sh cdp18      # just tb_cdp18_dump
-sim/ghdl/run.sh cs1800     # just tb_cs1800_dump
-```
-Analyzes/elaborates/runs `tb_cdp18_dump` and `tb_cs1800_dump` with GHDL
-(`--std=08`) and writes their TPB traces into `sim/ghdl/reference/`, which
-is committed as the golden reference for the current design. See
-`sim/ghdl/README.md` for the trace format.
-
-### Vivado xsim
-
-```
-source <Vivado install>/<version>/settings64.sh   # puts xvhdl/xelab/xsim on PATH
-sim/xsim/run.sh
-```
-Runs the same testbenches on Vivado's simulator and diffs the result
-against `sim/ghdl/reference/` — confirmed bit-for-bit identical on both
-designs (Vivado 2024.1). See `sim/xsim/README.md`.
+- Proven on real Zynq-7000 hardware (Cora Z7-07S): a program written from
+  Linux userspace, not baked into the bitstream, has run correctly --
+  see `boards/cora-z7-07s/BRINGUP_LOG.md`.
+- Still only ever run against a small, synthetic instruction-exerciser
+  program, in simulation and on hardware alike -- not yet against any
+  real historical CDP1802 software (an EPROM monitor, an OS). That's the
+  next real test.
 
 ## FPGA porting notes
 
@@ -138,12 +231,34 @@ internal wiring. Neither `cdp18` nor `cs1800` ever expose `DATA` at their
 own boundary, so this doesn't touch either system's external interface;
 `cs1800_cpu.vhd`, which does re-expose `DATA`, carries the same triplet.
 
+### Real hardware found real bugs simulation couldn't
+
+Two of them, both only visible once actual silicon ran actual timing --
+full waveform-level accounts in `boards/cora-z7-07s/BRINGUP_LOG.md`:
+
+- `ram.vhd`'s original async-write logic synthesized as 2208 individual
+  latches, which glitched on real hardware in a way RTL simulation can't
+  expose (identical reset/run cycles landed at different bogus
+  addresses). Fixed by making the write synchronous while keeping the
+  read combinational -- the standard "distributed RAM" idiom.
+- `cs1800_cpu.vhd`'s interrupt-request logic mixed an edge-detect and a
+  level-check on the same signal (`LC`) -- illegal for synthesis ("a
+  signal can't be both a clock and async data to the same flip-flop"),
+  though GHDL/Vivado's VHDL-2008 simulation mode never objected.
+
+Both fixes verified bit-for-bit identical against the golden reference
+before being trusted on hardware again.
+
 ## License
 
 MIT
 
 ## Status
 
-This is where active development now happens. `cdp1802` stays as the
-frozen pre-FPGA reference; FPGA-specific work (board top-levels,
-constraints, synthesis/implementation flows) lands here as it's added.
+This is where active development happens. `cdp1802` stays as the frozen
+pre-FPGA reference. The Cora Z7-07S bring-up (`boards/cora-z7-07s/`) has
+gone from "does it synthesize" to "a program loaded from Linux runs
+correctly on real hardware" in one sustained push; next up is testing
+against real historical CDP1802 software rather than only the synthetic
+test program, and eventually swapping this in for the CPU card in a real
+CS1800 backplane rack.
