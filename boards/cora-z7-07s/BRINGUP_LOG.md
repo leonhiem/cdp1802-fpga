@@ -55,3 +55,35 @@ the transactions it completed -- behaves exactly as simulated.
 with a real clocked (dual-port) BRAM. Not new scope; this empirically
 confirms exactly the risk already flagged when the 2208-latch count
 first showed up in the synthesis report.
+
+## 2026-09-11: milestone 2b, same day -- latch fix confirmed on hardware
+
+`ram.vhd`'s write path became synchronous (`rising_edge(clk)`, gated on
+`nCS`/`nWE`) while the read path stayed exactly as before -- plain
+combinational, zero latency. That's the standard "distributed RAM"
+(LUTRAM) idiom: real synthesizable primitive, not a latch. Verified
+bit-for-bit identical against the golden reference in both GHDL and
+Vivado xsim before touching hardware again. Post-route utilization:
+`Register as Latch: 0` (was 2208), `LUT as Distributed RAM: 72`, timing
+still fully closed.
+
+Reprogrammed, repeated the exact same reset/run/capture sequence:
+
+- **46 consecutive TPB rows now match the golden reference exactly**
+  (up from 3) -- full, uninterrupted fetch/execute agreement for as
+  long as the comparison stays meaningful (see below).
+- Across the entire captured buffer (4096 samples), `ram_addr` stayed
+  within `0x00`-`0xC3`, well inside the 276-byte program -- no
+  corruption, no runaway, anywhere. The latch-glitch bug is gone.
+- Row 46 is exactly where the golden reference's *first* interrupt
+  (`SC=11`) occurs -- but that's `tb_cs1800.vhd`'s testbench using a
+  deliberately fast, compressed fake `LC` (200-cycle half-period) to
+  exercise the interrupt path quickly in simulation, nothing like the
+  real 50 Hz `LC` this hardware build actually runs (`cs1800_top`'s
+  divider). A single ILA capture can't observe a real 10 ms `LC`
+  half-period, so no interrupt is expected in this window, and none
+  occurred -- not a bug, just two independently-correct `LC` rates that
+  were never going to stay in lockstep past that point. Full-trace
+  (including interrupt timing) comparison would need `LC` driven from
+  the same schedule on both sides, which isn't needed to call this
+  milestone done.

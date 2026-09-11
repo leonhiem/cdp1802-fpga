@@ -115,6 +115,7 @@ BEGIN
 
   u_ram : ENTITY work.ram
   PORT MAP (
+    clk      => CLOCK,
     address  => ram_addr,
     data_in  => data,
     data_out => ram_data_out,
