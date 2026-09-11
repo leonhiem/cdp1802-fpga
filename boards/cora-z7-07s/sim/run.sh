@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 #
-# Compile and run tb_cs1800_top (cs1800_top + shared_ram) and diff its
-# trace against the same golden reference tb_cs1800.vhd is checked
-# against, with g_lc_half_period overridden to match tb_cs1800.vhd's LC
-# exactly -- see tb_cs1800_top.vhd's header for why that lets this check
-# the *entire* trace, not just the pre-interrupt segment.
+# Compile and run the board-level testbenches:
+#   tb_cs1800_top   -- cs1800_top + shared_ram, diffed against the same
+#                      golden reference tb_cs1800.vhd is checked against
+#                      (g_lc_half_period overridden to match tb_cs1800.vhd's
+#                      LC exactly, so this checks the *entire* trace, not
+#                      just the pre-interrupt segment).
+#   tb_shared_ram   -- shared_ram's Port B byte-lane adapter directly
+#                      (untested by tb_cs1800_top, which only ever drives
+#                      Port A): full-word and single-byte-lane writes,
+#                      cross-port coherency.
 #
 # Usage: boards/cora-z7-07s/sim/run.sh
 
@@ -14,7 +19,6 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BOARD_DIR="$(cd "$HERE/.." && pwd)"
 ROOT="$(cd "$BOARD_DIR/../.." && pwd)"
 SRC="$ROOT/src/vhdl"
-TB="$ROOT/tb/vhdl"
 WORK="$HERE/run"
 GOLDEN="$ROOT/sim/ghdl/reference/tb_cs1800_tpb.txt"
 
@@ -45,13 +49,18 @@ SRCS=(
   "$BOARD_DIR/hdl/shared_ram.vhd"
   "$BOARD_DIR/hdl/cs1800_top.vhd"
   "$BOARD_DIR/sim/tb_cs1800_top.vhd"
+  "$BOARD_DIR/sim/tb_shared_ram.vhd"
 )
 
 (
   cd "$WORK"
   ghdl -a "${GHDL_FLAGS[@]}" "${SRCS[@]}"
+
   ghdl -e "${GHDL_FLAGS[@]}" tb_cs1800_top
   ghdl -r "${GHDL_FLAGS[@]}" tb_cs1800_top --ieee-asserts=disable
+
+  ghdl -e "${GHDL_FLAGS[@]}" tb_shared_ram
+  ghdl -r "${GHDL_FLAGS[@]}" tb_shared_ram
 )
 
 if diff -q "$WORK/tb_cs1800_top_tpb.txt" "$GOLDEN" >/dev/null; then
@@ -61,3 +70,5 @@ else
   diff "$WORK/tb_cs1800_top_tpb.txt" "$GOLDEN" || true
   exit 1
 fi
+
+echo "PASS: tb_shared_ram (see report above for details)"

@@ -72,9 +72,9 @@ ENTITY cs1800_top IS
 
     -- shared_ram Port B: native BRAM-style port for axi_bram_ctrl.
     ram_b_addr : IN  STD_LOGIC_VECTOR(15 DOWNTO 0);
-    ram_b_din  : IN  STD_LOGIC_VECTOR(7 DOWNTO 0);
-    ram_b_dout : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
-    ram_b_we   : IN  STD_LOGIC;
+    ram_b_din  : IN  STD_LOGIC_VECTOR(31 DOWNTO 0);
+    ram_b_dout : OUT STD_LOGIC_VECTOR(31 DOWNTO 0);
+    ram_b_we   : IN  STD_LOGIC_VECTOR(3 DOWNTO 0);
     ram_b_en   : IN  STD_LOGIC
   );
 END cs1800_top;

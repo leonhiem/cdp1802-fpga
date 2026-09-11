@@ -30,6 +30,15 @@
 --   ram.vhd carries), so a freshly-programmed board behaves exactly
 --   like today's even before software writes anything.
 --
+--   Port B is 32 bits wide with a 4-bit byte-enable, not 8 bits: on
+--   axi_bram_ctrl, the native BRAM port stays 32-bit regardless of the
+--   configured AXI data width (C_S_AXI_DATA_WIDTH only affects the
+--   AXI-facing side) -- checked directly against the IP rather than
+--   assumed. b_addr is still a plain 16-bit byte address (matching
+--   axi_bram_ctrl's bram_addr_a exactly), with its low 2 bits selecting
+--   the byte lane -- the standard little-endian AXI byte-lane
+--   convention (byte 0 = bits 7:0 = lowest address).
+--
 -------------------------------------------------------------------------------
 
 LIBRARY IEEE;
@@ -49,11 +58,12 @@ ENTITY shared_ram IS
     a_data_out : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
     a_nWE, a_nCS, a_nOE : IN STD_LOGIC;
 
-    -- Port B: plain synchronous BRAM-style port, for axi_bram_ctrl.
+    -- Port B: axi_bram_ctrl's native BRAM_PORTA signature (32-bit data,
+    -- byte address, 4-bit byte-enable).
     b_addr : IN  STD_LOGIC_VECTOR(15 DOWNTO 0);
-    b_din  : IN  STD_LOGIC_VECTOR(7 DOWNTO 0);
-    b_dout : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
-    b_we   : IN  STD_LOGIC;
+    b_din  : IN  STD_LOGIC_VECTOR(31 DOWNTO 0);
+    b_dout : OUT STD_LOGIC_VECTOR(31 DOWNTO 0);
+    b_we   : IN  STD_LOGIC_VECTOR(3 DOWNTO 0);
     b_en   : IN  STD_LOGIC
   );
 END shared_ram;
@@ -66,7 +76,14 @@ ARCHITECTURE str OF shared_ram IS
     OTHERS     => X"00"
   );
 
+  SIGNAL b_word_base : NATURAL RANGE 0 TO 65535;
+
 BEGIN
+
+  -- Word-aligned base byte address for Port B (low 2 bits of b_addr
+  -- select the byte lane within b_din/b_dout/b_we, not a memory index
+  -- of their own).
+  b_word_base <= to_integer(unsigned(b_addr(15 DOWNTO 2))) * 4;
 
   -- One arbitrated write, synchronous -- same timing as src/vhdl/ram.vhd's
   -- (nCS/nWE held stable for several CLOCK cycles per access, so landing
@@ -75,8 +92,12 @@ BEGIN
   BEGIN
     IF rising_edge(clk) THEN
       IF sel_ext = '1' THEN
-        IF b_en = '1' AND b_we = '1' THEN
-          mem(to_integer(unsigned(b_addr))) <= b_din;
+        IF b_en = '1' THEN
+          FOR i IN 0 TO 3 LOOP
+            IF b_we(i) = '1' THEN
+              mem(b_word_base + i) <= b_din(8*i+7 DOWNTO 8*i);
+            END IF;
+          END LOOP;
         END IF;
       ELSE
         IF a_nCS = '0' AND a_nWE = '0' THEN
@@ -96,6 +117,7 @@ BEGIN
     END IF;
   END PROCESS;
 
-  b_dout <= mem(to_integer(unsigned(b_addr)));
+  b_dout <= mem(b_word_base + 3) & mem(b_word_base + 2) &
+            mem(b_word_base + 1) & mem(b_word_base + 0);
 
 END str;

@@ -100,7 +100,7 @@ BEGIN
 
     ram_b_addr => (OTHERS => '0'),
     ram_b_din  => (OTHERS => '0'),
-    ram_b_we   => '0',
+    ram_b_we   => (OTHERS => '0'),
     ram_b_en   => '0'
   );
 

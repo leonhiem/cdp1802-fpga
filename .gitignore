@@ -9,3 +9,4 @@ vivado_pid*.str
 webtalk*.jou
 webtalk*.log
 .Xil/
+.srcs/
