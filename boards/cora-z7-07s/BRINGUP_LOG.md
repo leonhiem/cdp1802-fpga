@@ -56,6 +56,38 @@ with a real clocked (dual-port) BRAM. Not new scope; this empirically
 confirms exactly the risk already flagged when the 2208-latch count
 first showed up in the synthesis report.
 
+## 2026-09-11: milestone 2c -- first program loaded from Linux, running on hardware
+
+`shared_ram` (4KB, `axi_bram_ctrl` at `0x4000_0000`) programmed,
+timing-closed (WNS +5.563ns), reprogrammed onto the board. With `reset`
+still asserted (the default `0x01` on power-up hands Port B write
+access to software), wrote a brand-new tiny program via `devmem` --
+not the test program baked into the bitstream:
+
+```
+devmem 0x40000000 32 0x0001307B   # addr0=SEQ(0x7B) addr1=BR(0x30) addr2=0x01
+devmem 0x40000000                 # read back: 0x0001307B -- confirmed
+```
+
+Armed the ILA, released reset+run (`devmem 0x41200000 32 0x68`), read
+`Q=1` back from the status register, and captured the bus trace:
+
+```
+ram_addr data nMRD nMWR SC
+0000     7B   0    1    00     <- fetch SEQ at address 0
+0001     30   0    1    00     <- fetch BR
+0002     01   0    1    01     <- read branch target (0x01 -> back to 0001)
+0001     30   0    1    00     <- loops forever, exactly as written
+0002     01   0    1    01
+...
+```
+
+Exactly the designed program (`SEQ` then an infinite `BR` self-loop),
+loaded entirely from Linux userspace over AXI, executing correctly on
+real silicon. The full pipeline -- `devmem` write -> `axi_bram_ctrl` ->
+`shared_ram` Port B -> reset release -> `cs1800` reading via Port A --
+is proven end-to-end.
+
 ## 2026-09-11: milestone 2b, same day -- latch fix confirmed on hardware
 
 `ram.vhd`'s write path became synchronous (`rising_edge(clk)`, gated on
