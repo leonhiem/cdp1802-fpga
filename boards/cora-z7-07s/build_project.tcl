@@ -30,6 +30,7 @@ set_property target_language VHDL [current_project]
 set src_files {
   src/vhdl/cdp1802_pkg.vhd
   src/vhdl/instr_pkg.vhd
+  src/vhdl/test_program_pkg.vhd
   src/vhdl/dff.vhd
   src/vhdl/ff.vhd
   src/vhdl/reg.vhd

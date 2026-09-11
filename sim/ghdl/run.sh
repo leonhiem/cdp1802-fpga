@@ -27,6 +27,7 @@ GHDL_FLAGS=(--std=08 --workdir="$WORK" -fsynopsys -frelaxed)
 COMMON_SRCS=(
   "$SRC/cdp1802_pkg.vhd"
   "$SRC/instr_pkg.vhd"
+  "$SRC/test_program_pkg.vhd"
   "$SRC/dff.vhd"
   "$SRC/ff.vhd"
   "$SRC/reg.vhd"

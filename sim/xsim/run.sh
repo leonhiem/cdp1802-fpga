@@ -33,6 +33,7 @@ mkdir -p "$WORK"
 COMMON_SRCS=(
   "$SRC/cdp1802_pkg.vhd"
   "$SRC/instr_pkg.vhd"
+  "$SRC/test_program_pkg.vhd"
   "$SRC/dff.vhd"
   "$SRC/ff.vhd"
   "$SRC/reg.vhd"

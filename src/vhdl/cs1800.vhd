@@ -32,16 +32,20 @@ ENTITY cs1800 IS
     single : IN STD_LOGIC;
     run : IN STD_LOGIC;
 
-    -- Debug visibility only (see boards/cora-z7-07s/): the same six
-    -- signals sim/ghdl/reference/tb_cs1800_tpb.txt records per TPB
-    -- pulse, exposed here so a board top-level can wire them to an
-    -- ILA. No effect on cs1800's own functional behavior.
+    -- RAM is external (see boards/cora-z7-07s/dp_ram.vhd): dbg_ram_addr/
+    -- dbg_data/dbg_nmrd/dbg_nmwr double as the real interface an
+    -- external memory needs (address, write-data, strobes) as well as
+    -- ILA debug visibility -- ram_data_out_ext feeds its read result
+    -- back into the system bus merge below. dbg_sc/dbg_tpb are
+    -- debug-only, no external memory needs them. No effect on cs1800's
+    -- own functional behavior beyond the RAM itself moving outside it.
     dbg_ram_addr : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
     dbg_data     : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
     dbg_nmrd     : OUT STD_LOGIC;
     dbg_nmwr     : OUT STD_LOGIC;
     dbg_sc       : OUT STD_LOGIC_VECTOR(1 DOWNTO 0);
-    dbg_tpb      : OUT STD_LOGIC
+    dbg_tpb      : OUT STD_LOGIC;
+    ram_data_out_ext : IN STD_LOGIC_VECTOR(7 DOWNTO 0)
   );
 END cs1800;
 
@@ -61,14 +65,12 @@ ARCHITECTURE str OF cs1800 IS
   SIGNAL data  : STD_LOGIC_VECTOR(7 DOWNTO 0);
   SIGNAL cpu_data_out : STD_LOGIC_VECTOR(7 DOWNTO 0);
   SIGNAL cpu_data_oe  : STD_LOGIC; -- unused here; useful for a future AXI/BRAM bridge
-  SIGNAL ram_data_out : STD_LOGIC_VECTOR(7 DOWNTO 0);
   SIGNAL io_input_data : STD_LOGIC_VECTOR(7 DOWNTO 0);
   SIGNAL sc_i  : STD_LOGIC_VECTOR(1 DOWNTO 0);
   SIGNAL addr  : STD_LOGIC_VECTOR(7 DOWNTO 0);
   SIGNAL addr_high  : STD_LOGIC_VECTOR(7 DOWNTO 0);
   SIGNAL ram_addr  : STD_LOGIC_VECTOR(15 DOWNTO 0);
 
-  SIGNAL n_memsel   : STD_LOGIC;
   SIGNAL n_io_out_sel : STD_LOGIC;
   SIGNAL n_io_in_sel : STD_LOGIC;
   SIGNAL io_output   : STD_LOGIC_VECTOR(7 DOWNTO 0);
@@ -110,20 +112,6 @@ BEGIN
   ram_addr(7 DOWNTO 0) <= addr;
   ram_addr(15 DOWNTO 8) <= addr_high;
 
-  n_memsel <= '0';
-
-
-  u_ram : ENTITY work.ram
-  PORT MAP (
-    clk      => CLOCK,
-    address  => ram_addr,
-    data_in  => data,
-    data_out => ram_data_out,
-    nWE      => nmwr,
-    nCS      => n_memsel,
-    nOE      => nmrd
-  );
-
   n_io_out_sel <= '0' WHEN n = "101" ELSE '1';
   n_io_in_sel <= '0' WHEN (n = "101" AND nmrd = '1') ELSE '1';
 
@@ -143,7 +131,7 @@ BEGIN
     nCS => n_io_in_sel
   );
 
-  data <= cpu_data_out OR ram_data_out OR io_input_data;
+  data <= cpu_data_out OR ram_data_out_ext OR io_input_data;
 
   dbg_ram_addr <= ram_addr;
   dbg_data     <= data;
