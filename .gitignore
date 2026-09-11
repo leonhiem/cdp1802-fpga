@@ -1,0 +1,11 @@
+# Vivado batch-mode journal/log/webtalk files land wherever vivado was
+# launched from -- the actual project lives outside this repo (see
+# boards/*/build_project.tcl), so these are always stray here.
+vivado.jou
+vivado.log
+vivado_*.backup.jou
+vivado_*.backup.log
+vivado_pid*.str
+webtalk*.jou
+webtalk*.log
+.Xil/

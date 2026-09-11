@@ -38,6 +38,9 @@ ENTITY cs1800_cpu IS
     TPB      : OUT   STD_LOGIC;
     nMRD     : OUT   STD_LOGIC;
     nMWR     : OUT   STD_LOGIC;
+    -- Debug visibility only (see boards/cora-z7-07s/): promoted from an
+    -- internal signal, no behavior change.
+    SC        : OUT   STD_LOGIC_VECTOR(1 DOWNTO 0);
 
     led_Q     : OUT   STD_LOGIC;
     led_fetch : OUT   STD_LOGIC;
@@ -57,7 +60,6 @@ ARCHITECTURE str OF cs1800_cpu IS
 
   SIGNAL  nWAIT    : STD_LOGIC;
   SIGNAL  nCLEAR   : STD_LOGIC;
-  SIGNAL  SC       : STD_LOGIC_VECTOR(1 DOWNTO 0);
   SIGNAL  nDMA_OUT : STD_LOGIC;
   SIGNAL  nDMA_IN  : STD_LOGIC;
   SIGNAL  Q_i  : STD_LOGIC;
@@ -65,23 +67,33 @@ ARCHITECTURE str OF cs1800_cpu IS
   SIGNAL  nINT_i  : STD_LOGIC;
   SIGNAL  nINT_tmp  : STD_LOGIC;
   SIGNAL  nEF4_tmp  : STD_LOGIC;
+  SIGNAL  lc_d1     : STD_LOGIC := '0'; -- LC, registered one CLOCK cycle,
+                                        -- for a synchronous falling-edge
+                                        -- detect (see p_lc_int below)
   SIGNAL  nEF_i  : STD_LOGIC_VECTOR(3 DOWNTO 0);
 
   SIGNAL int_ack : STD_LOGIC;
   SIGNAL int_ack_start : STD_LOGIC := '0';
   SIGNAL int_ack_stop : STD_LOGIC := '0';
   SIGNAL int_ack_counter : STD_LOGIC_vector(15 downto 0) := (OTHERS => '0');
+  -- Reading the SC output port directly (VHDL-2008) is what GHDL/xsim
+  -- validate against, but Vivado's synthesizer defaults .vhd files to
+  -- VHDL-93, where an OUT port can't be read from inside its own
+  -- architecture. Keep the internal signal and drive the port from it
+  -- instead -- portable, no toolchain flag needed.
+  SIGNAL sc_i : STD_LOGIC_VECTOR(1 DOWNTO 0);
 
 BEGIN
 
   Q <= Q_i;
   led_Q <= Q_i;
+  SC <= sc_i;
 
-  led_fetch <= '1' WHEN SC="00" ELSE '0';
-  led_exec  <= '1' WHEN SC="01" ELSE '0';
-  led_dma_ack <= '1' WHEN SC="10" ELSE '0';
+  led_fetch <= '1' WHEN sc_i="00" ELSE '0';
+  led_exec  <= '1' WHEN sc_i="01" ELSE '0';
+  led_dma_ack <= '1' WHEN sc_i="10" ELSE '0';
 
-  int_ack <= '1' WHEN SC="11" ELSE '0';
+  int_ack <= '1' WHEN sc_i="11" ELSE '0';
 
   nDMA_OUT <= '1';
   nDMA_IN <= '1';
@@ -118,12 +130,22 @@ BEGIN
 
 
 
-  p_lc_int : PROCESS(LC, int_ack, Q_i, reset)
+  -- FPGA note: the original process used falling_edge(LC) while also
+  -- reading LC as a plain level in the same IF/ELSIF -- synthesis
+  -- rejects that (a signal can't be both a clock and an async data
+  -- input to the same flip-flop: "clock expression not supported").
+  -- Rewritten as a fully CLOCK-synchronous process: lc_d1 registers LC
+  -- one CLOCK cycle behind, so "lc_d1='1' and LC='0'" is a synchronous
+  -- falling-edge detect instead of an asynchronous one.
+  p_lc_int : PROCESS(CLOCK)
   BEGIN
-    IF reset = '1' OR LC = '1' OR int_ack = '1' THEN
-      nINT_tmp <= '1';
-    ELSIF falling_edge(LC) THEN
-      nINT_tmp <= '0';
+    IF rising_edge(CLOCK) THEN
+      lc_d1 <= LC;
+      IF reset = '1' OR LC = '1' OR int_ack = '1' THEN
+        nINT_tmp <= '1';
+      ELSIF lc_d1 = '1' AND LC = '0' THEN
+        nINT_tmp <= '0';
+      END IF;
     END IF;
   END PROCESS;
 
@@ -162,7 +184,7 @@ BEGIN
     nWAIT    => nWAIT,
     nCLEAR   => nCLEAR,
     Q        => Q_i,
-    SC       => SC,
+    SC       => sc_i,
     nMRD     => nMRD,
     DATA_IN  => DATA_IN,
     DATA_OUT => DATA_OUT,

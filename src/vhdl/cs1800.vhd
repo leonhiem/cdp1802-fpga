@@ -30,7 +30,18 @@ ENTITY cs1800 IS
     reset : IN STD_LOGIC;
     halt  : IN STD_LOGIC;
     single : IN STD_LOGIC;
-    run : IN STD_LOGIC
+    run : IN STD_LOGIC;
+
+    -- Debug visibility only (see boards/cora-z7-07s/): the same six
+    -- signals sim/ghdl/reference/tb_cs1800_tpb.txt records per TPB
+    -- pulse, exposed here so a board top-level can wire them to an
+    -- ILA. No effect on cs1800's own functional behavior.
+    dbg_ram_addr : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
+    dbg_data     : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
+    dbg_nmrd     : OUT STD_LOGIC;
+    dbg_nmwr     : OUT STD_LOGIC;
+    dbg_sc       : OUT STD_LOGIC_VECTOR(1 DOWNTO 0);
+    dbg_tpb      : OUT STD_LOGIC
   );
 END cs1800;
 
@@ -52,6 +63,7 @@ ARCHITECTURE str OF cs1800 IS
   SIGNAL cpu_data_oe  : STD_LOGIC; -- unused here; useful for a future AXI/BRAM bridge
   SIGNAL ram_data_out : STD_LOGIC_VECTOR(7 DOWNTO 0);
   SIGNAL io_input_data : STD_LOGIC_VECTOR(7 DOWNTO 0);
+  SIGNAL sc_i  : STD_LOGIC_VECTOR(1 DOWNTO 0);
   SIGNAL addr  : STD_LOGIC_VECTOR(7 DOWNTO 0);
   SIGNAL addr_high  : STD_LOGIC_VECTOR(7 DOWNTO 0);
   SIGNAL ram_addr  : STD_LOGIC_VECTOR(15 DOWNTO 0);
@@ -75,6 +87,7 @@ BEGIN
     DATA_IN  => data,
     DATA_OUT => cpu_data_out,
     DATA_OE  => cpu_data_oe,
+    SC       => sc_i,
     N        => n,
     TPA      => tpa,
     TPB      => tpb,
@@ -130,5 +143,12 @@ BEGIN
   );
 
   data <= cpu_data_out OR ram_data_out OR io_input_data;
+
+  dbg_ram_addr <= ram_addr;
+  dbg_data     <= data;
+  dbg_nmrd     <= nmrd;
+  dbg_nmwr     <= nmwr;
+  dbg_sc       <= sc_i;
+  dbg_tpb      <= tpb;
 
 END str;
