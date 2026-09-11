@@ -8,7 +8,7 @@
 -- License: MIT
 --
 -- Description:
---   64KB memory shared between cs1800 (Port A) and the AXI side (Port
+--   4KB memory shared between cs1800 (Port A) and the AXI side (Port
 --   B, via axi_bram_ctrl), so Linux can load a program while cs1800 is
 --   held in reset.
 --
@@ -26,18 +26,35 @@
 --   src/vhdl/ram.vhd's (see its own header for why that's synthesis-
 --   safe), so cs1800's own behavior is provably unchanged from before.
 --
+--   4KB, not the real backplane's 64KB: Port A's async read (needed to
+--   keep this timing-safe, see above) means real Block RAM -- which is
+--   inherently synchronous-read only -- can't be used, so this maps to
+--   distributed RAM (LUTRAM) regardless of size. 64KB of LUTRAM doesn't
+--   fit (confirmed by trying it: ~33,000 LUTs needed against this
+--   part's ~6,000-LUT LUTRAM budget). 4KB -- 16x today's proven
+--   276-byte test program, real headroom for hand-written test
+--   programs -- fits comfortably. a_address/b_addr both stay full
+--   16-bit ports (matching cs1800's real 16-bit address bus and
+--   axi_bram_ctrl's bram_addr_a exactly); only the low 12 bits actually
+--   address memory, the top 4 are ignored -- exactly how a real
+--   smaller-than-the-full-address-space RAM chip behaves electrically.
+--
 --   Pre-filled from test_program_pkg (the same contents src/vhdl/
 --   ram.vhd carries), so a freshly-programmed board behaves exactly
 --   like today's even before software writes anything.
 --
---   Port B is 32 bits wide with a 4-bit byte-enable, not 8 bits: on
---   axi_bram_ctrl, the native BRAM port stays 32-bit regardless of the
---   configured AXI data width (C_S_AXI_DATA_WIDTH only affects the
---   AXI-facing side) -- checked directly against the IP rather than
---   assumed. b_addr is still a plain 16-bit byte address (matching
---   axi_bram_ctrl's bram_addr_a exactly), with its low 2 bits selecting
---   the byte lane -- the standard little-endian AXI byte-lane
---   convention (byte 0 = bits 7:0 = lowest address).
+--   Underlying storage is an array of 32-bit words, not bytes: on
+--   axi_bram_ctrl, the native BRAM port stays 32-bit with a 4-bit
+--   byte-enable regardless of the configured AXI data width (checked
+--   directly against the IP, not assumed), and a byte-indexed array
+--   read as "four elements concatenated together" for Port B is
+--   exactly the memory shape Vivado's inference doesn't recognize
+--   (confirmed by trying it: "memory pattern...not supported", falling
+--   back to individual flip-flops). One word-addressed array with
+--   byte-lane slices -- all locally static, no dynamic-bound slicing --
+--   is the standard, tool-recognized byte-enabled-BRAM shape. The low 2
+--   of the 12 used address bits select the byte lane -- the standard
+--   little-endian AXI convention (byte 0 = bits 7:0 = lowest address).
 --
 -------------------------------------------------------------------------------
 
@@ -71,53 +88,93 @@ END shared_ram;
 
 ARCHITECTURE str OF shared_ram IS
 
-  SIGNAL mem : t_mem_array(0 TO 65535) := (
-    0 TO 275   => c_test_program,
-    OTHERS     => X"00"
-  );
+  TYPE t_word_array IS ARRAY (NATURAL RANGE <>) OF STD_LOGIC_VECTOR(31 DOWNTO 0);
 
-  SIGNAL b_word_base : NATURAL RANGE 0 TO 65535;
+  -- Packs test_program_pkg's byte array into 32-bit words, little-endian
+  -- (byte 0 -> word 0 bits 7:0, byte 1 -> word 0 bits 15:8, ...).
+  FUNCTION init_mem RETURN t_word_array IS
+    VARIABLE result : t_word_array(0 TO 1023) := (OTHERS => X"00000000");
+  BEGIN
+    FOR i IN c_test_program'RANGE LOOP
+      CASE (i MOD 4) IS
+        WHEN 0 => result(i/4)(7 DOWNTO 0)   := c_test_program(i);
+        WHEN 1 => result(i/4)(15 DOWNTO 8)  := c_test_program(i);
+        WHEN 2 => result(i/4)(23 DOWNTO 16) := c_test_program(i);
+        WHEN OTHERS => result(i/4)(31 DOWNTO 24) := c_test_program(i);
+      END CASE;
+    END LOOP;
+    RETURN result;
+  END FUNCTION;
+
+  SIGNAL mem : t_word_array(0 TO 1023) := init_mem;
+
+  -- Port A's write, expressed in Port B's own "word index + 4-lane
+  -- byte-enable" shape (a_data_in replicated across all four lanes;
+  -- only the one lane a_address actually selects ever has its
+  -- write-enable bit set). One canonical write pattern with the
+  -- Port A/B muxing done in plain signal assignments outside the
+  -- process, rather than two structurally different patterns
+  -- arbitrated inside it.
+  SIGNAL eff_word_idx : NATURAL RANGE 0 TO 1023;
+  SIGNAL eff_data      : STD_LOGIC_VECTOR(31 DOWNTO 0);
+  SIGNAL eff_we        : STD_LOGIC_VECTOR(3 DOWNTO 0);
+  SIGNAL eff_en        : STD_LOGIC;
 
 BEGIN
 
-  -- Word-aligned base byte address for Port B (low 2 bits of b_addr
-  -- select the byte lane within b_din/b_dout/b_we, not a memory index
-  -- of their own).
-  b_word_base <= to_integer(unsigned(b_addr(15 DOWNTO 2))) * 4;
+  -- Only the low 12 address bits are used (4KB) -- see the FPGA note above.
+  eff_word_idx <= to_integer(unsigned(b_addr(11 DOWNTO 2))) WHEN sel_ext = '1'
+                  ELSE to_integer(unsigned(a_address(11 DOWNTO 2)));
 
-  -- One arbitrated write, synchronous -- same timing as src/vhdl/ram.vhd's
-  -- (nCS/nWE held stable for several CLOCK cycles per access, so landing
-  -- on one clean rising edge is safe; see that file's own header note).
+  eff_data <= b_din WHEN sel_ext = '1' ELSE a_data_in & a_data_in & a_data_in & a_data_in;
+
+  eff_we <= b_we WHEN sel_ext = '1' ELSE
+            "0001" WHEN (a_nCS = '0' AND a_nWE = '0' AND a_address(1 DOWNTO 0) = "00") ELSE
+            "0010" WHEN (a_nCS = '0' AND a_nWE = '0' AND a_address(1 DOWNTO 0) = "01") ELSE
+            "0100" WHEN (a_nCS = '0' AND a_nWE = '0' AND a_address(1 DOWNTO 0) = "10") ELSE
+            "1000" WHEN (a_nCS = '0' AND a_nWE = '0' AND a_address(1 DOWNTO 0) = "11") ELSE
+            "0000";
+
+  eff_en <= b_en WHEN sel_ext = '1' ELSE '1';
+
+  -- The one canonical byte-enabled write, synchronous -- same timing as
+  -- src/vhdl/ram.vhd's Port A write (nCS/nWE held stable for several
+  -- CLOCK cycles per access, so landing on one clean rising edge is
+  -- safe; see that file's own header note). Four static-slice lane
+  -- writes, not a loop over a variable-bound slice -- the standard
+  -- inferable shape.
   PROCESS (clk) IS
   BEGIN
     IF rising_edge(clk) THEN
-      IF sel_ext = '1' THEN
-        IF b_en = '1' THEN
-          FOR i IN 0 TO 3 LOOP
-            IF b_we(i) = '1' THEN
-              mem(b_word_base + i) <= b_din(8*i+7 DOWNTO 8*i);
-            END IF;
-          END LOOP;
-        END IF;
-      ELSE
-        IF a_nCS = '0' AND a_nWE = '0' THEN
-          mem(to_integer(unsigned(a_address))) <= a_data_in;
-        END IF;
+      IF eff_en = '1' THEN
+        IF eff_we(0) = '1' THEN mem(eff_word_idx)(7 DOWNTO 0)   <= eff_data(7 DOWNTO 0);   END IF;
+        IF eff_we(1) = '1' THEN mem(eff_word_idx)(15 DOWNTO 8)  <= eff_data(15 DOWNTO 8);  END IF;
+        IF eff_we(2) = '1' THEN mem(eff_word_idx)(23 DOWNTO 16) <= eff_data(23 DOWNTO 16); END IF;
+        IF eff_we(3) = '1' THEN mem(eff_word_idx)(31 DOWNTO 24) <= eff_data(31 DOWNTO 24); END IF;
       END IF;
     END IF;
   END PROCESS;
 
-  -- Two independent, zero-latency combinational reads -- real distributed
-  -- RAM natively supports one write port plus multiple read ports.
+  -- Port A read: zero-latency combinational, one static-slice lane
+  -- selected via a case on the address's low 2 bits (no dynamic-bound
+  -- slicing).
   PROCESS (a_address, a_nCS, a_nOE, mem) IS
+    VARIABLE word_idx : NATURAL RANGE 0 TO 1023;
   BEGIN
     a_data_out <= (OTHERS => '0'); -- chip is not selected / not reading
     IF (a_nCS = '0' AND a_nOE = '0') THEN
-      a_data_out <= mem(to_integer(unsigned(a_address)));
+      word_idx := to_integer(unsigned(a_address(11 DOWNTO 2)));
+      CASE a_address(1 DOWNTO 0) IS
+        WHEN "00"   => a_data_out <= mem(word_idx)(7 DOWNTO 0);
+        WHEN "01"   => a_data_out <= mem(word_idx)(15 DOWNTO 8);
+        WHEN "10"   => a_data_out <= mem(word_idx)(23 DOWNTO 16);
+        WHEN OTHERS => a_data_out <= mem(word_idx)(31 DOWNTO 24);
+      END CASE;
     END IF;
   END PROCESS;
 
-  b_dout <= mem(b_word_base + 3) & mem(b_word_base + 2) &
-            mem(b_word_base + 1) & mem(b_word_base + 0);
+  -- Port B read: the whole word, one array read, no concatenation of
+  -- separate elements.
+  b_dout <= mem(to_integer(unsigned(b_addr(11 DOWNTO 2))));
 
 END str;

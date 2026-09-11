@@ -1,11 +1,12 @@
 #
 # Build the CS1800 hardware bring-up project: PS7 + AXI GPIO (control/
-# status) + cs1800_top (cs1800, unmodified, plus the LC divider).
+# status) + AXI BRAM Controller (program loading, via shared_ram's Port
+# B) + cs1800_top (cs1800, unmodified, plus the LC divider).
 #
 # Reuses the exact proven IP set and PS7 configuration from
 # ~/fpga/cora_project_bram (processing_system7 -> smartconnect ->
-# <AXI peripheral>, proc_sys_reset for the AXI-side reset), swapping
-# axi_bram_ctrl for axi_gpio.
+# <AXI peripheral>, proc_sys_reset for the AXI-side reset) for both AXI
+# peripherals.
 #
 # Usage:
 #   source /path/to/Vivado/2024.1/settings64.sh
@@ -46,6 +47,7 @@ set src_files {
   src/vhdl/io_inp.vhd
   src/vhdl/cs1800_cpu.vhd
   src/vhdl/cs1800.vhd
+  boards/cora-z7-07s/hdl/shared_ram.vhd
   boards/cora-z7-07s/hdl/cs1800_top.vhd
 }
 set add_paths {}
@@ -75,7 +77,7 @@ set_property CONFIG.PCW_FPGA0_PERIPHERAL_FREQMHZ {25} $processing_system7_0
 set rst_ps7_0_100M [create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 rst_ps7_0_100M]
 set axi_smc [create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 axi_smc]
 set_property CONFIG.NUM_SI {1} $axi_smc
-set_property CONFIG.NUM_MI {1} $axi_smc
+set_property CONFIG.NUM_MI {2} $axi_smc
 
 # --- AXI GPIO: dual channel, 8 bits each ---
 #   channel 1 (all outputs) -> cs1800_top.ctrl_in
@@ -92,6 +94,16 @@ set_property -dict [list \
   CONFIG.C_GPIO2_WIDTH {8} \
   CONFIG.C_ALL_INPUTS_2 {1} \
 ] $axi_gpio_0
+
+# --- AXI BRAM Controller: bridges shared_ram's Port B (inside
+# cs1800_top) to the AXI side, single-port mode (the same proven config
+# cora_project_bram uses) since shared_ram's Port B is the only BRAM
+# port it needs to drive. Native BRAM port stays 32-bit/4-byte-enable
+# regardless of AXI data width (checked directly against the IP), which
+# is exactly what shared_ram's Port B was built to match -- no
+# C_S_AXI_DATA_WIDTH override needed.
+set axi_bram_ctrl_0 [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.1 axi_bram_ctrl_0]
+set_property CONFIG.SINGLE_PORT_BRAM {1} $axi_bram_ctrl_0
 
 # --- cs1800_top: our RTL, as a module reference ---
 set cs1800_top_0 [create_bd_cell -type module -reference cs1800_top cs1800_top_0]
@@ -128,21 +140,36 @@ set_property -dict [list \
 # ---------------------------------------------------------------------
 connect_bd_intf_net [get_bd_intf_pins processing_system7_0/M_AXI_GP0] [get_bd_intf_pins axi_smc/S00_AXI]
 connect_bd_intf_net [get_bd_intf_pins axi_smc/M00_AXI] [get_bd_intf_pins axi_gpio_0/S_AXI]
+connect_bd_intf_net [get_bd_intf_pins axi_smc/M01_AXI] [get_bd_intf_pins axi_bram_ctrl_0/S_AXI]
 
 connect_bd_net [get_bd_pins processing_system7_0/FCLK_CLK0] \
   [get_bd_pins processing_system7_0/M_AXI_GP0_ACLK] \
   [get_bd_pins axi_smc/aclk] \
   [get_bd_pins axi_gpio_0/s_axi_aclk] \
+  [get_bd_pins axi_bram_ctrl_0/s_axi_aclk] \
   [get_bd_pins rst_ps7_0_100M/slowest_sync_clk] \
   [get_bd_pins cs1800_top_0/CLOCK]
 
 connect_bd_net [get_bd_pins processing_system7_0/FCLK_RESET0_N] [get_bd_pins rst_ps7_0_100M/ext_reset_in]
 connect_bd_net [get_bd_pins rst_ps7_0_100M/peripheral_aresetn] \
   [get_bd_pins axi_gpio_0/s_axi_aresetn] \
+  [get_bd_pins axi_bram_ctrl_0/s_axi_aresetn] \
   [get_bd_pins axi_smc/aresetn]
 
 connect_bd_net [get_bd_pins axi_gpio_0/gpio_io_o] [get_bd_pins cs1800_top_0/ctrl_in]
 connect_bd_net [get_bd_pins axi_gpio_0/gpio2_io_i] [get_bd_pins cs1800_top_0/status_out]
+
+# axi_bram_ctrl's BRAM_PORTA -> cs1800_top's shared_ram Port B. Plain
+# pin-level connections (not an interface connection): axi_bram_ctrl's
+# BRAM_PORTA is a bus interface, but cs1800_top's ram_b_* are ordinary
+# RTL ports, and connect_bd_net works at the pin level regardless.
+connect_bd_net [get_bd_pins axi_bram_ctrl_0/bram_addr_a]   [get_bd_pins cs1800_top_0/ram_b_addr]
+connect_bd_net [get_bd_pins axi_bram_ctrl_0/bram_wrdata_a] [get_bd_pins cs1800_top_0/ram_b_din]
+connect_bd_net [get_bd_pins axi_bram_ctrl_0/bram_rddata_a] [get_bd_pins cs1800_top_0/ram_b_dout]
+connect_bd_net [get_bd_pins axi_bram_ctrl_0/bram_we_a]     [get_bd_pins cs1800_top_0/ram_b_we]
+connect_bd_net [get_bd_pins axi_bram_ctrl_0/bram_en_a]     [get_bd_pins cs1800_top_0/ram_b_en]
+# bram_rst_a is left unconnected: shared_ram has no reset input, and
+# doesn't need one -- it should keep whatever program was loaded.
 
 connect_bd_net [get_bd_pins processing_system7_0/FCLK_CLK0] [get_bd_pins u_ila_0/clk]
 connect_bd_net [get_bd_pins cs1800_top_0/dbg_ram_addr] [get_bd_pins u_ila_0/probe0]
@@ -155,6 +182,16 @@ connect_bd_net [get_bd_pins cs1800_top_0/dbg_tpb]      [get_bd_pins u_ila_0/prob
 assign_bd_address -offset 0x41200000 -range 0x00001000 \
   -target_address_space [get_bd_addr_spaces processing_system7_0/Data] \
   [get_bd_addr_segs axi_gpio_0/S_AXI/Reg] -force
+
+# Address range stays 64KB (matching the real backplane's 2x32K RAM
+# cards, and keeping bram_addr_a a full 16 bits, matching shared_ram's
+# b_addr exactly), even though shared_ram itself only decodes the low
+# 4KB -- addresses 0x1000-0xFFFF alias onto that same 4KB window (see
+# shared_ram.vhd's own header). Same base address cora_project_bram's
+# standalone BRAM demo used, for continuity.
+assign_bd_address -offset 0x40000000 -range 0x00010000 \
+  -target_address_space [get_bd_addr_spaces processing_system7_0/Data] \
+  [get_bd_addr_segs axi_bram_ctrl_0/S_AXI/Mem0] -force
 
 validate_bd_design
 

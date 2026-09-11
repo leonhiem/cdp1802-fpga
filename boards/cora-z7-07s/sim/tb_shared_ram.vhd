@@ -92,9 +92,18 @@ BEGIN
     a_nOE <= '1';
     WAIT UNTIL rising_edge(clk);
 
-    -- Write a full 32-bit word (all byte lanes) at word address 0x1000
-    -- (byte address 0x4000) via Port B.
-    b_addr <= X"4000";
+    -- The pre-loaded test program must actually be visible through
+    -- Port B (the byte-lane adapter's init_mem path), not just Port A
+    -- (which every cs1800_top testbench already exercises) -- byte 0
+    -- of address 0 is c_DIS = 0x71.
+    b_addr <= X"0000";
+    WAIT FOR 1 ns;
+    check(b_dout(7 DOWNTO 0) = X"71", "test program not visible at address 0 via Port B");
+
+    -- Write a full 32-bit word (all byte lanes) at byte address 0x0800
+    -- -- well clear of the test program's own 0x000-0x113 footprint --
+    -- via Port B.
+    b_addr <= X"0800";
     b_din  <= X"DDCCBBAA";
     b_we   <= "1111";
     b_en   <= '1';
@@ -109,13 +118,13 @@ BEGIN
 
     -- Port A reads each byte individually and must see the same bytes
     -- Port B wrote, little-endian (byte 0 = bits 7:0 = lowest address).
-    read_a(a_address, a_nOE, clk, 16#4000#);
+    read_a(a_address, a_nOE, clk, 16#0800#);
     check(a_data_out = X"AA", "Port A byte 0 mismatch after Port B word write");
-    read_a(a_address, a_nOE, clk, 16#4001#);
+    read_a(a_address, a_nOE, clk, 16#0801#);
     check(a_data_out = X"BB", "Port A byte 1 mismatch after Port B word write");
-    read_a(a_address, a_nOE, clk, 16#4002#);
+    read_a(a_address, a_nOE, clk, 16#0802#);
     check(a_data_out = X"CC", "Port A byte 2 mismatch after Port B word write");
-    read_a(a_address, a_nOE, clk, 16#4003#);
+    read_a(a_address, a_nOE, clk, 16#0803#);
     check(a_data_out = X"DD", "Port A byte 3 mismatch after Port B word write");
     a_nOE <= '1';
 
@@ -123,7 +132,7 @@ BEGIN
     -- byte-enable, leaving the other three lanes of the same word
     -- untouched, and confirm only that lane changed.
     WAIT UNTIL rising_edge(clk);
-    b_addr <= X"4000";
+    b_addr <= X"0800";
     b_din  <= X"FF000000"; -- only byte 2's value (0x00) matters here
     b_we   <= "0100"; -- byte lane 2 only
     b_en   <= '1';
@@ -132,15 +141,15 @@ BEGIN
     b_we <= "0000";
     WAIT UNTIL rising_edge(clk);
 
-    read_a(a_address, a_nOE, clk, 16#4000#);
+    read_a(a_address, a_nOE, clk, 16#0800#);
     check(a_data_out = X"AA", "byte 0 should be untouched by single-lane write");
     a_nOE <= '1';
     WAIT UNTIL rising_edge(clk);
-    read_a(a_address, a_nOE, clk, 16#4002#);
+    read_a(a_address, a_nOE, clk, 16#0802#);
     check(a_data_out = X"00", "byte 2 should reflect the single-lane write");
     a_nOE <= '1';
     WAIT UNTIL rising_edge(clk);
-    read_a(a_address, a_nOE, clk, 16#4003#);
+    read_a(a_address, a_nOE, clk, 16#0803#);
     check(a_data_out = X"DD", "byte 3 should still be untouched");
     a_nOE <= '1';
 
@@ -148,16 +157,22 @@ BEGIN
     WAIT UNTIL rising_edge(clk);
     sel_ext <= '0'; -- hand write access to Port A
     WAIT UNTIL rising_edge(clk);
-    a_address <= X"5000";
+    a_address <= X"0900";
     a_data_in <= X"42";
     a_nWE <= '0';
     WAIT UNTIL rising_edge(clk);
     a_nWE <= '1';
     WAIT UNTIL rising_edge(clk);
 
-    b_addr <= X"5000";
+    b_addr <= X"0900";
     WAIT FOR 1 ns;
     check(b_dout(7 DOWNTO 0) = X"42", "Port B should see Port A's write");
+
+    -- The scratch writes above must not have aliased onto the test
+    -- program's own address range.
+    b_addr <= X"0000";
+    WAIT FOR 1 ns;
+    check(b_dout(7 DOWNTO 0) = X"71", "test program corrupted by scratch-address writes");
 
     REPORT "ALL CHECKS PASSED";
     tb_end <= '1';
