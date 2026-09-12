@@ -10,3 +10,8 @@ webtalk*.jou
 webtalk*.log
 .Xil/
 .srcs/
+
+# Third-party copyrighted material (vendor schematics, ROM dumps) --
+# this repo is public, so these stay local-only. See
+# doc/CS1800_HARDWARE.md for the documentation derived from them.
+doc/cs1800_hardware_source/
