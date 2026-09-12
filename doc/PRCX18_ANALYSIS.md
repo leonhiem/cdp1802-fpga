@@ -92,15 +92,30 @@ enable the transmitter, per the datasheet's own two-write convention).
   (`N=1..7` x `Q=0/1`), independent confirmation that real firmware
   does exercise the full N+Q addressing space, not just N alone.
 
-## Next step
+## Implemented (2026-09-12)
 
-Enough is known now to model a working CDP1854 register interface for
-GHDL testing: the address (`N=4,Q=1`), the register-select mechanism
-(software, via `OUT 1`; not a second hardware address), the exact
-status bits real firmware checks, and the boot format (8N1). Build
-just enough of a CDP1854 to satisfy this driver, load the real ROM
-into `sim/ghdl` alongside a proper ROM+RAM memory split (see
-`doc/CS1800_HARDWARE.md`'s "Memory map"), and watch for the CPU
+The register interface and memory split described above are now real,
+committed VHDL: `src/vhdl/cs1800_memory.vhd` (the ROM+RAM split),
+`src/vhdl/cdp1854.vhd` and `src/vhdl/cs1800_io_select.vhd` (the UART
+pair and its `OUT 1` port/register-select latch), wired together by
+`src/vhdl/cs1800_console.vhd`. All content-agnostic and copyright-clean
+-- none of them embed the real ROM. `sim/ghdl/run.sh memory`/`console`
+exercise them with synthetic content (see those files' own headers).
+
+One real hardware/software subtlety worth recording here, found while
+wiring this up and confirmed directly against `instr.vhd`: **on this
+CPU, `OUT` electrically asserts `nMRD` and `INP` asserts `nMWR`** --
+backwards from naive intuition, but correct once you think about it
+from the CPU's own memory-system perspective: `OUT` is mechanically
+"read `M(R(X))` into `D`" (so IO devices snoop the read strobe to
+*capture* a byte), and `INP` is mechanically "write the bus value into
+`M(R(X))`" (so an IO device *drives* the bus on the write strobe).
+Matches `cs1800.vhd`'s own pre-existing `io_out.vhd` wiring
+(`nWE => nmrd`) exactly, so this generalizes, not something specific to
+the CDP1854.
+
+**Next step**: run the real PRCX-18 ROM (kept local-only, see the top
+of this file) through `cs1800_console` in GHDL and watch for the CPU
 reaching its `>>` prompt in a bus-trace capture -- that, not real
 serial timing or physical hardware, is the meaningful "it worked"
 signal for this phase.

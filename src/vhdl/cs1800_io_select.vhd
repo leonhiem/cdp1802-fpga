@@ -1,0 +1,67 @@
+-------------------------------------------------------------------------------
+--
+-- File Name: cs1800_io_select.vhd
+-- Author: Leon Hiemstra
+--
+-- Title: CS1800 SIO board port/register-select latch
+--
+-- License: MIT
+--
+-- Description:
+--   Models a small write-only latch found on the real CS1800 SIO board
+--   (best guess: its CD4076 quad register -- see doc/CS1800_HARDWARE.md),
+--   addressed at CDP1802 device code N=1 (OUT 1) independent of Q --
+--   confirmed against the real PRCX-18 ROM's own boot code, which
+--   touches this device during its very first device-clear sweep before
+--   Q is ever set (see doc/PRCX18_ANALYSIS.md).
+--
+--   Real firmware writes a small value here immediately before every
+--   CDP1854 access (N=4,Q=1 -- see cdp1854.vhd) to pick, entirely in
+--   software, which of the SIO board's two UART ports is being addressed
+--   and which of its register pairs:
+--     bit 1 (0x02): the CDP1854's rsel  -- 0 = Data register pair,
+--                                          1 = Status/Control pair
+--     bit 2 (0x04): port select         -- 0 = port A, 1 = port B
+--   (bits 0 and 3-7 are latched but otherwise unused by this model.)
+--
+--   No read path is modeled: nothing observed in the real ROM ever reads
+--   this device back.
+--
+-- FPGA note: clocked on tpb, same convention as io_out.vhd/cdp1854.vhd --
+-- see cdp1854.vhd's header for why that's a clean, glitch-free choice
+-- here.
+--
+-------------------------------------------------------------------------------
+
+LIBRARY IEEE;
+USE IEEE.std_logic_1164.ALL;
+
+
+ENTITY cs1800_io_select IS
+  PORT (
+    clk     : IN  STD_LOGIC; -- driven by TPB -- see FPGA note above
+    data_in : IN  STD_LOGIC_VECTOR(7 DOWNTO 0);
+    nCS     : IN  STD_LOGIC; -- '0' when this device (N=1) is addressed
+    nWE     : IN  STD_LOGIC; -- '0' during an OUT (CPU write)
+    sel_out : OUT STD_LOGIC_VECTOR(7 DOWNTO 0)
+  );
+END cs1800_io_select;
+
+ARCHITECTURE str OF cs1800_io_select IS
+
+  SIGNAL reg : STD_LOGIC_VECTOR(7 DOWNTO 0) := (OTHERS => '0');
+
+BEGIN
+
+  PROCESS (clk) IS
+  BEGIN
+    IF rising_edge(clk) THEN
+      IF nCS = '0' AND nWE = '0' THEN
+        reg <= data_in;
+      END IF;
+    END IF;
+  END PROCESS;
+
+  sel_out <= reg;
+
+END str;

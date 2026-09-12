@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 #
-# Compile and run the GHDL reference-dump testbenches for cdp18 and cs1800.
+# Compile and run the GHDL reference-dump testbenches for cdp18 and cs1800,
+# plus plain assertion-based checks for the newer, non-golden-reference
+# units (cs1800_memory's ROM/RAM split, cs1800_console's IO device decode).
 #
-# For each design, this analyzes the sources (order taken from hdllib.cfg),
-# elaborates the *_dump testbench, runs it, and copies the resulting trace
-# (one line per TPB pulse: time_ns ram_addr data nMRD nMWR Q SC) into
-# sim/ghdl/reference/.
+# For cdp18/cs1800, this analyzes the sources (order taken from
+# hdllib.cfg), elaborates the *_dump testbench, runs it, and copies the
+# resulting trace (one line per TPB pulse: time_ns ram_addr data nMRD
+# nMWR Q SC) into sim/ghdl/reference/. For memory/console, it just runs
+# the testbench and relies on its own ASSERT ... SEVERITY FAILURE checks
+# (see boards/cora-z7-07s/sim/run.sh's tb_shared_ram for the same style).
 #
-# Usage: sim/ghdl/run.sh [cdp18] [cs1800]
-#        (with no arguments, both are run)
+# Usage: sim/ghdl/run.sh [cdp18] [cs1800] [memory] [console]
+#        (with no arguments, all four are run)
 
 set -euo pipefail
 
@@ -44,6 +48,10 @@ COMMON_SRCS=(
   "$SRC/cdp18.vhd"
   "$SRC/cs1800_cpu.vhd"
   "$SRC/cs1800.vhd"
+  "$SRC/cs1800_memory.vhd"
+  "$SRC/cdp1854.vhd"
+  "$SRC/cs1800_io_select.vhd"
+  "$SRC/cs1800_console.vhd"
 )
 
 run_one() {
@@ -65,15 +73,31 @@ run_one() {
   echo "wrote $REF/$out_file ($(wc -l < "$REF/$out_file") lines)"
 }
 
+run_check() {
+  local name="$1"
+  local tb_file="$2"
+
+  echo "=== $name ==="
+  (
+    cd "$WORK"
+    ghdl -a "${GHDL_FLAGS[@]}" "${COMMON_SRCS[@]}" "$tb_file"
+    ghdl -e "${GHDL_FLAGS[@]}" "$name"
+    ghdl -r "${GHDL_FLAGS[@]}" "$name" --ieee-asserts=disable
+  )
+  echo "PASS: $name"
+}
+
 TARGETS=("$@")
 if [ ${#TARGETS[@]} -eq 0 ]; then
-  TARGETS=(cdp18 cs1800)
+  TARGETS=(cdp18 cs1800 memory console)
 fi
 
 for t in "${TARGETS[@]}"; do
   case "$t" in
-    cdp18)  run_one tb_cdp18_dump  "$TB/tb_cdp18_dump.vhd"  tb_cdp18_tpb.txt ;;
-    cs1800) run_one tb_cs1800_dump "$TB/tb_cs1800_dump.vhd" tb_cs1800_tpb.txt ;;
+    cdp18)    run_one tb_cdp18_dump  "$TB/tb_cdp18_dump.vhd"  tb_cdp18_tpb.txt ;;
+    cs1800)   run_one tb_cs1800_dump "$TB/tb_cs1800_dump.vhd" tb_cs1800_tpb.txt ;;
+    memory)   run_check tb_cs1800_memory  "$TB/tb_cs1800_memory.vhd" ;;
+    console)  run_check tb_cs1800_console "$TB/tb_cs1800_console.vhd" ;;
     *) echo "unknown target: $t" >&2; exit 1 ;;
   esac
 done

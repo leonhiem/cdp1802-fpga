@@ -45,7 +45,19 @@ ENTITY cs1800 IS
     dbg_nmwr     : OUT STD_LOGIC;
     dbg_sc       : OUT STD_LOGIC_VECTOR(1 DOWNTO 0);
     dbg_tpb      : OUT STD_LOGIC;
-    ram_data_out_ext : IN STD_LOGIC_VECTOR(7 DOWNTO 0)
+    ram_data_out_ext : IN STD_LOGIC_VECTOR(7 DOWNTO 0);
+
+    -- IO is external too (see src/vhdl/cs1800_console.vhd and
+    -- doc/CS1800_HARDWARE.md/doc/PRCX18_ANALYSIS.md): dbg_n exposes the
+    -- device-select field an external IO decoder needs (Q is already an
+    -- output above; TPB/nMRD/nMWR/the data bus are already exposed via
+    -- the dbg_* ports above -- the same strobes serve both memory and
+    -- IO on a real CDP1802). io_data_in_ext merges into the system bus
+    -- the same way ram_data_out_ext does. Defaults to a no-op (all
+    -- zeros OR'd in) so this doesn't require touching any existing
+    -- instantiation.
+    dbg_n        : OUT STD_LOGIC_VECTOR(2 DOWNTO 0);
+    io_data_in_ext : IN STD_LOGIC_VECTOR(7 DOWNTO 0) := (OTHERS => '0')
   );
 END cs1800;
 
@@ -131,7 +143,7 @@ BEGIN
     nCS => n_io_in_sel
   );
 
-  data <= cpu_data_out OR ram_data_out_ext OR io_input_data;
+  data <= cpu_data_out OR ram_data_out_ext OR io_input_data OR io_data_in_ext;
 
   dbg_ram_addr <= ram_addr;
   dbg_data     <= data;
@@ -139,5 +151,6 @@ BEGIN
   dbg_nmwr     <= nmwr;
   dbg_sc       <= sc_i;
   dbg_tpb      <= tpb;
+  dbg_n        <= n;
 
 END str;

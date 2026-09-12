@@ -8,13 +8,23 @@ the previous one to confirm nothing but the intended thing changed.
 ## Running
 
 ```
-sim/ghdl/run.sh            # both designs
+sim/ghdl/run.sh            # all four checks below
 sim/ghdl/run.sh cdp18      # just tb_cdp18_dump
 sim/ghdl/run.sh cs1800     # just tb_cs1800_dump
+sim/ghdl/run.sh memory     # just tb_cs1800_memory
+sim/ghdl/run.sh console    # just tb_cs1800_console
 ```
 
 Requires GHDL with the mcode backend (tested with GHDL 4.1.0, `--std=08`).
 Analysis order follows `hdllib.cfg`'s `synth_files` list at the repo root.
+
+`memory` and `console` aren't part of the golden-reference dump/diff below
+-- they're plain `ASSERT ... SEVERITY FAILURE`-based checks (same style as
+`boards/cora-z7-07s/sim/tb_shared_ram.vhd`) for `cs1800_memory.vhd`'s
+ROM/RAM split and `cs1800_console.vhd`'s IO device decode
+(`cdp1854.vhd`/`cs1800_io_select.vhd`) -- see those files' headers, and
+`doc/CS1800_HARDWARE.md`/`doc/PRCX18_ANALYSIS.md` for the real hardware
+and firmware this decode is built from.
 
 ## What gets dumped
 
