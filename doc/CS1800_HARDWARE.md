@@ -144,14 +144,13 @@ sections above:
   target for the ROM disassembly.
 - SIO baud: **port A = 4800**, **port B = 9600** (jumper-selected taps
   off the shared 2.4576MHz crystal + CD4040 divider).
-- **Caveat**: tracing the CD4028's decoded output all the way to one
-  specific port's `CS1` pin hit the limits of what's legible on a
-  30-year-old photocopy (wires initially taken for that turned out to
-  be SDI/SDO routing to the MAX232 instead) -- which physical port (A
-  or B) jumper 14 actually drives isn't pixel-confirmed. Not a
-  blocker: whichever baud/format value the ROM's boot code writes into
-  the CDP1854 control register will match either 4800 or 9600, which
-  settles it independently of the wire-trace.
+- **Resolved by the ROM disassembly** (see `doc/PRCX18_ANALYSIS.md`):
+  tracing the CD4028's decoded output all the way to one specific
+  port's `CS1` pin had hit the limits of what's legible on a
+  30-year-old photocopy. Turns out that ambiguity was moot -- the real
+  firmware picks port A vs. B (and Data-vs-Status/Control register
+  select) entirely in software via `OUT 1`, not via a second hardware
+  address. `Q` just stays fixed at 1.
 
 ## What to do with the schematics and EPROM dump
 
