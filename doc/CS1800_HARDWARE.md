@@ -42,26 +42,35 @@ could a plain RAM.
 
 ## Serial port
 
-A real CDP1854 UART chip on the bus -- not bit-banged on `Q`/`EF` lines.
-Running the real OS's console driver will eventually need a CDP1854 (or
-a register-compatible stand-in) modeled at whatever IO address the real
-firmware expects. That address isn't known yet; don't guess it ahead of
-disassembling the real ROM (see below).
+The SIO board (`SIO/8706`, "Dual RS232 interface") carries **two**
+CDP1854 UARTs -- "port A" and "port B", each through its own MAX232
+level-shifter to a physical RS232 connector. Not bit-banged on `Q`/`EF`
+lines. Running the real OS's console driver will need a CDP1854 (or a
+register-compatible stand-in) modeled at whatever IO address the real
+firmware expects for whichever port is the console. That address isn't
+known yet; don't guess it ahead of disassembling the real ROM (see
+below) -- see "Schematics analysis" for why the schematic alone can't
+settle it either.
 
 ## IO addressing
 
 Uses the CPU's 3 `N` lines *and* the `Q` line together -- 4 bits, 16
 possible IO device select codes, twice what bare `N(2:0)` gives on a
 stock CDP1802 (which reserves `N=0` and so only has 7 usable codes).
-Matters for correctly decoding `INP`/`OUT` instructions once real
-firmware is available to test against.
+Schematic-confirmed: the SIO board's address decode is a **CD4028**
+decoder fed by exactly `N2`, `N1`, `N0`, `Q`. Matters for correctly
+decoding `INP`/`OUT` instructions once real firmware is available to
+test against.
 
 ## Interrupts
 
 A single interrupt line into the CDP1802, as usual for the architecture.
-The `EF1`-`EF4` flag lines are polled by firmware to identify which
-device raised the interrupt -- the standard CDP1802 technique for an
-architecture with only one interrupt input.
+Schematic-confirmed (SIO board): both mechanisms coexist and are wired
+together, not either/or. Each CDP1854's own `INT` pin feeds the shared
+bus `INT` line (wakes the CPU), **and** a jumper ("int. select") also
+routes that same interrupt onto one of `EF1`/`EF2`/`EF3`, so the ISR
+identifies which board/port raised it by checking that `EF` line after
+taking the interrupt.
 
 ## Original firmware
 
@@ -78,15 +87,60 @@ serial I/O board schematics to PDF.
 **Neither the ROM dump nor the schematics belong in this repo's git
 history**: this repo is public on GitHub, and both are third-party
 copyrighted material regardless of the hardware's age. Keep them local
-only; only commit documentation *derived* from them (memory maps,
-register maps, boot-sequence notes) the way this file and
-`doc/CDP1854_UART.md` already do.
+only (`doc/cs1800_hardware_source/`, gitignored); only commit
+documentation *derived* from them (memory maps, register maps,
+boot-sequence notes) the way this file and `doc/CDP1854_UART.md`
+already do.
+
+## Schematics analysis (2026-09-12)
+
+The user scanned three boards to PDF: `CPU/9111` (Revisie 9206),
+`32K/8605` (Revisie 9201, x2 in the rack), and `SIO/8706` (Revisie
+9202). What each confirms, beyond what's already folded into the
+sections above:
+
+- **CPU board**: runs a genuine **4MHz crystal** -- independent
+  confirmation that this port's 4MHz timing-validation target matches
+  the real hardware exactly, not just a round-number assumption. The
+  CPU socket supports both the 1802 and the enhanced 1806 (not
+  relevant yet). No address decoding happens on this board -- it only
+  presents the raw bus (`N0-N2`, `TPA`, `TPB`, `MRD`, `MWR`, `Q`,
+  `EF1-4`, `INT`, address/data) onto the backplane; all decoding lives
+  on the peripheral boards. There's also SC-decoded FETCH/EXECUTE/
+  DMA/INT-ACK front-panel LEDs and watchdog/reset/single-step debug
+  logic -- cosmetic/debug, not needed for the emulation goal.
+- **Memory board**: matches "Memory map" above exactly, and shows the
+  actual decode: a CD4556 (fed by two `TPA`-latched 4042s holding the
+  upper address bits) generates the 4 chip-selects within each 32K
+  module; a strap picks which half of the 64K space a given module
+  answers to. `MRD`/`MWR` from the bus drive every socket's `OE`/`WE`
+  directly and unqualified -- exactly `shared_ram.vhd`'s plain
+  strobe-driven design already models. One detail worth carrying into
+  the model: a real EPROM's `WE` pin does nothing, so **writes to the
+  EPROM range (`0x0000`-`0x1FFF`) are hardware no-ops** on the real
+  board -- the FPGA's ROM region should silently discard writes, not
+  corrupt or crash.
+- **SIO board**: see "IO addressing" and "Interrupts" above for the
+  two big confirmations (CD4028 decode on N+Q, dual EF+INT interrupt
+  ID). One more finding that matters a lot for what happens next:
+  **which N+Q code and which EF line each port actually uses, and
+  which of the 8 jumper-selectable baud rates (75/150/300/600/1200/
+  2400/4800/9600, from a 2.4576MHz crystal + CD4040 divider) is
+  selected, are all board jumper settings** -- not fixed by the
+  schematic. So the schematic confirms the *mechanism* but not the
+  *values* in this specific unit. That makes disassembling the ROM
+  not just useful but necessary to pin those down (or physically
+  checking the jumpers on the real board). A CD4076 quad register
+  also generates some additional modem-control-type signals (`Z1`-
+  `Z7`) -- likely DTR/RTS-style lines to the physical connectors, low
+  priority for a plain terminal console.
 
 ## What to do with the schematics and EPROM dump
 
-1. Read the schematics for the real N/Q-line address decode (which
-   device codes are actually wired to the UART vs. other peripherals)
-   and the real EF-line wiring, instead of guessing.
+1. ~~Read the schematics for the real N/Q-line address decode and EF
+   wiring~~ -- done above; the mechanism is confirmed, but the actual
+   codes/EF-line/baud rate this unit uses are jumper-set and still
+   need the ROM.
 2. Convert the Intel HEX dump into whatever byte-array format
    `sim/ghdl`/`shared_ram.vhd`'s loaders need (or write a small loader
    if a generic one doesn't exist yet), and disassemble it to find the
