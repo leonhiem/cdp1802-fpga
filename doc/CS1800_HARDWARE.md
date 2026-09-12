@@ -122,25 +122,44 @@ sections above:
   corrupt or crash.
 - **SIO board**: see "IO addressing" and "Interrupts" above for the
   two big confirmations (CD4028 decode on N+Q, dual EF+INT interrupt
-  ID). One more finding that matters a lot for what happens next:
-  **which N+Q code and which EF line each port actually uses, and
-  which of the 8 jumper-selectable baud rates (75/150/300/600/1200/
-  2400/4800/9600, from a 2.4576MHz crystal + CD4040 divider) is
-  selected, are all board jumper settings** -- not fixed by the
-  schematic. So the schematic confirms the *mechanism* but not the
-  *values* in this specific unit. That makes disassembling the ROM
-  not just useful but necessary to pin those down (or physically
-  checking the jumpers on the real board). A CD4076 quad register
-  also generates some additional modem-control-type signals (`Z1`-
-  `Z7`) -- likely DTR/RTS-style lines to the physical connectors, low
-  priority for a plain terminal console.
+  ID). A CD4076 quad register also generates some additional
+  modem-control-type signals (`Z1`-`Z7`) -- likely DTR/RTS-style lines
+  to the physical connectors, low priority for a plain terminal
+  console.
+
+### This unit's actual jumper settings (given by the user, 2026-09-12)
+
+- Memory: module 1 = "0-32K" (`0x0000`-`0x7FFF`), module 2 = "32-64K"
+  (`0x8000`-`0xFFFF`) -- matches "Memory map" above exactly.
+- SIO "int select" = **EF2**: the SIO board's combined interrupt (both
+  CDP1854 `INT` outputs, diode-OR'd) asserts `EF2` in addition to the
+  shared bus `INT` line.
+- SIO "i/o select" = **14**. The CD4028's exact input wiring, read off
+  the schematic: `A0=N0, A1=N2, A2=N1, A3=/Q` (a gate inverts `Q`
+  before A3). Jumper position 14 ties the decoder's `SEL` output to
+  `Q2`, active when `A3 A2 A1 A0 = 0010`. Solving backwards: `N0=0`,
+  `N2=1`, `N1=0` (**N=4**) and `A3=0` means **`Q=1`**. So whichever
+  port this jumper drives responds to **`OUT 4` (`0x64`) / `INP 4`
+  (`0x6C`), only while `Q=1`** (i.e. after a `SEQ`) -- a concrete grep
+  target for the ROM disassembly.
+- SIO baud: **port A = 4800**, **port B = 9600** (jumper-selected taps
+  off the shared 2.4576MHz crystal + CD4040 divider).
+- **Caveat**: tracing the CD4028's decoded output all the way to one
+  specific port's `CS1` pin hit the limits of what's legible on a
+  30-year-old photocopy (wires initially taken for that turned out to
+  be SDI/SDO routing to the MAX232 instead) -- which physical port (A
+  or B) jumper 14 actually drives isn't pixel-confirmed. Not a
+  blocker: whichever baud/format value the ROM's boot code writes into
+  the CDP1854 control register will match either 4800 or 9600, which
+  settles it independently of the wire-trace.
 
 ## What to do with the schematics and EPROM dump
 
 1. ~~Read the schematics for the real N/Q-line address decode and EF
-   wiring~~ -- done above; the mechanism is confirmed, but the actual
-   codes/EF-line/baud rate this unit uses are jumper-set and still
-   need the ROM.
+   wiring~~ -- done above, including this unit's actual jumper values.
+   The prime candidate device code is **N=4, Q=1** (`OUT 4`/`INP 4`) --
+   confirm which port that is (4800 or 9600 baud) from what the ROM's
+   boot code actually configures.
 2. Convert the Intel HEX dump into whatever byte-array format
    `sim/ghdl`/`shared_ram.vhd`'s loaders need (or write a small loader
    if a generic one doesn't exist yet), and disassemble it to find the
