@@ -130,9 +130,40 @@ validated by the user's own real-hardware timing: real RAM-counting
 takes ~2-3 seconds, matching the simulation's 8.6M cycles at 4MHz
 (2.15s) almost exactly. The user also confirmed reaching the prompt
 does not depend on LC/timer interrupts (tested with the CPU board's
-`CLOCK OFF` switch either way) -- so a stall isn't an interrupt-wait
-issue. **Next step**: run substantially longer and watch specifically
-for `Dutch 1800 MicroProUsers` / `CS1800/PRCX-18` / `-SYS-Starting
-Console Task-` / `_08>` in the port-A transmit capture -- that, not
-real serial timing or physical hardware, is the meaningful "it worked"
-signal for this phase.
+`CLOCK OFF` switch either way).
+
+## MILESTONE (2026-09-13): exact match against real hardware
+
+A longer run (150M cycles) still hadn't reached the prompt, settling
+instead into what looked like legitimate but extended OS-internal
+looping. Root cause: the exploratory testbench drove `LC` as a
+continuously-toggling *compressed* clock (~10kHz, for fast interrupt-
+path testing elsewhere in this project) -- a rate matching *neither*
+of the two real conditions the user had actually tested (LC stopped,
+or LC at real 50Hz), and not something the real firmware was ever
+designed against. Holding `LC` constant instead (matching the real
+"CLOCK OFF" switch state) fixed it immediately: the boot completed in
+~5,000,000 TPB pulses (~10M CLOCK cycles, ~2.5s simulated) -- far
+faster than the failed 150M-cycle run.
+
+The resulting port-A transmit capture is a **byte-for-byte exact
+match** to the boot transcript the user read directly off the real
+CS1800's bus-activity board: the `Dutch 1800 MicroProUsers` /
+`CS1800/PRCX-18    V1.9.0` banner, a blank line, `-SYS-Starting
+Console Task-`, and the real prompt `_08>` (plus a few leading
+non-printing terminal control bytes -- a clear-screen and two bells --
+consistent with what a real serial terminal would act on rather than
+display).
+
+This is the meaningful "it worked" signal for this whole phase: the
+ported CDP1802 core, the new CDP1854 UART model, and the ROM+RAM
+memory split -- running the real, unmodified, historical PRCX-18
+firmware -- reproduce the real machine's behavior exactly, through to
+its actual login prompt.
+
+**Possible next steps** (undecided): inject real characters via the
+CDP1854 model's already-stubbed `rx_data`/`rx_data_available` ports to
+try commands (`dmp`, `tskl`, ...) against the simulation the way the
+user already has on real hardware, or move toward the Cora Z7-07S
+hardware bring-up path now that the simulation-side milestone is
+solid.
