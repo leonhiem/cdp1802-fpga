@@ -13,6 +13,24 @@ xsim). That reference is the regression baseline for every change made
 here: it should still be reproduced (or the difference explained and
 verified) after any edit, checked with `sim/ghdl/run.sh` / `sim/xsim/run.sh`.
 
+## Milestone: proven against real historical software
+
+The real, unmodified **PRCX-18 v1.9.0** operating system -- historical
+CDP1802 software this core was never designed against, running on the
+real CS1800 backplane rack this project is ultimately targeting --
+boots correctly under this implementation, all the way to its actual
+login prompt, in a GHDL simulation of the full system (CPU + a CDP1854
+UART model + a real ROM/RAM memory split, see `doc/PRCX18_ANALYSIS.md`
+and `doc/CS1800_HARDWARE.md`). The transmitted serial output is a
+byte-for-byte exact match against the boot transcript captured directly
+off the real, physical rack.
+
+That's strong, independent proof that the CDP1802 core's reverse-
+engineered instruction-set logic is correct -- not just able to run a
+synthetic test program, but able to run real, independently-written
+historical software exactly as the original chip did. See "Authorship"
+below for who did what to get here.
+
 ## Overview
 
 This is a gate/register-level re-implementation of the CDP1802, built
@@ -167,6 +185,10 @@ doc/                   original design sketches and simulation screenshots
 | `cs1800.vhd`, `cs1800_cpu.vhd` | A second top-level wrapper around the same core, driven by simpler system control lines (`reset`/`halt`/`single`/`run`) instead of the raw datasheet handshake, and matching the real backplane in one more way: `cs1800.vhd`'s RAM is external (its own ports, not an internal instance), since on the real rack RAM lives on separate cards from the CPU card. This variant has already been run through Intel Quartus once, and is the one proven end-to-end on the Cora Z7-07S. |
 | `ram.vhd` | Single-port RAM (used by `cdp18.vhd`, and externally by `cs1800`'s own testbenches), pre-loaded from `test_program_pkg.vhd`. |
 | `io_inp.vhd`, `io_out.vhd` | Minimal input/output port models. |
+| `cs1800_memory.vhd` | The real backplane's memory map: a read-only boot EPROM region plus plain RAM above it (content-agnostic -- see `doc/CS1800_HARDWARE.md`'s "Memory map"). |
+| `cdp1854.vhd` | Register-level model of the SIO board's real CDP1854 UART (see `doc/CDP1854_UART.md`). |
+| `cs1800_io_select.vhd` | The SIO board's `OUT 1` port/register-select latch (see `doc/PRCX18_ANALYSIS.md`). |
+| `cs1800_console.vhd` | Wraps `cs1800` with the memory map and UART pair above into the full system that boots real PRCX-18 firmware -- see the milestone at the top of this file. |
 
 ### `tb/vhdl/`
 
@@ -204,10 +226,12 @@ two real bugs found only by testing on real silicon.
 - Proven on real Zynq-7000 hardware (Cora Z7-07S): a program written from
   Linux userspace, not baked into the bitstream, has run correctly --
   see `boards/cora-z7-07s/BRINGUP_LOG.md`.
-- Still only ever run against a small, synthetic instruction-exerciser
-  program, in simulation and on hardware alike -- not yet against any
-  real historical CDP1802 software (an EPROM monitor, an OS). That's the
-  next real test.
+- Proven against real historical CDP1802 software, not just the
+  synthetic test program: the real PRCX-18 v1.9.0 operating system
+  boots correctly to its actual login prompt in GHDL simulation,
+  matching a real physical CS1800 rack byte-for-byte -- see the
+  milestone at the top of this file and `doc/PRCX18_ANALYSIS.md`.
+  Not yet run on the Cora Z7-07S hardware itself; that's next.
 
 ## FPGA porting notes
 
@@ -249,6 +273,23 @@ full waveform-level accounts in `boards/cora-z7-07s/BRINGUP_LOG.md`:
 Both fixes verified bit-for-bit identical against the golden reference
 before being trusted on hardware again.
 
+## Authorship
+
+The CDP1802 core itself -- the reverse-engineered instruction-set logic
+(opcode decode, state machine, ALU, register file) -- is entirely Leon
+Hiemstra's own work, built instruction by instruction against the
+datasheet in the original [cdp1802](https://github.com/leonhiem/cdp1802)
+repo starting in 2021. The milestone at the top of this file is
+independent proof that work is correct.
+
+Everything in this FPGA port -- removing the internal tri-state ('Z')
+buses and the two further synthesis fixes found only through real
+hardware bring-up (see "FPGA porting notes" above), the golden-reference
+testbench simulation methodology, the CDP1854 UART model and memory
+split that made the PRCX-18 milestone possible, and the Cora Z7-07S
+hardware bring-up -- was done by Claude (Anthropic), directed and
+guided by Leon throughout.
+
 ## License
 
 MIT
@@ -258,7 +299,9 @@ MIT
 This is where active development happens. `cdp1802` stays as the frozen
 pre-FPGA reference. The Cora Z7-07S bring-up (`boards/cora-z7-07s/`) has
 gone from "does it synthesize" to "a program loaded from Linux runs
-correctly on real hardware" in one sustained push; next up is testing
-against real historical CDP1802 software rather than only the synthetic
-test program, and eventually swapping this in for the CPU card in a real
-CS1800 backplane rack.
+correctly on real hardware" to "the real PRCX-18 OS boots correctly in
+simulation" in one sustained push. Next up: bring the CDP1854 UART model
+and ROM/RAM memory split to the Cora Z7-07S hardware itself, with the
+goal of seeing PRCX-18's actual interactive prompt live over serial from
+within the Cora's PetaLinux environment -- and eventually swapping this
+in for the CPU card in the real CS1800 backplane rack.
