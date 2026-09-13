@@ -17,13 +17,19 @@ Task-` message and a task-list display (`ID FLAGS PRI STACK PID CMD`,
 i.e. a `ps`-style command). It has a command interpreter with a real
 command table: `CMDL DMP ECHO INS LOAD RUN SH STAT TIME TSKL`, each
 with its own syntax-error string (e.g. `-LOA-SYNTAX/SYSPAR ERR-`), and
-`LOAD` has progress messages (`-LOA-Loading ` ... ` done.`). The most
-useful find for testing: **`>>`** sits immediately after the command
-table, in exactly the position a prompt/table-terminator sentinel
-would occupy -- very likely the actual command prompt printed over
-serial. That's a concrete string to watch for in a future GHDL bus
-trace or capture: reaching it is the "it booted for real" signal for
-this whole effort.
+`LOAD` has progress messages (`-LOA-Loading ` ... ` done.`).
+
+**Real hardware ground truth (2026-09-13)**: the user checked the
+actual boot sequence and prompt on the real CS1800 via its 4th
+backplane board's bus-activity display. The real prompt is **`_08>`**
+-- the `>>` guessed above from static analysis (sitting right after
+the command table) was wrong, corrected here. Full real boot text, in
+order: `Dutch 1800 MicroProUsers` -> `CS1800/PRCX-18    V1.9.0` ->
+(blank line) -> `-SYS-Starting Console Task-` -> `_08>`. Also
+confirmed: the console is port A at 4800 baud (resolves the port-A/B
+ambiguity below definitively); `dmp` shows a 256-byte page dump (e.g.
+`0x4000`-`0x40FF`); `tskl` lists exactly 3 tasks (`System`, `Console`,
+and the transient one running the command itself, e.g. `tskl`).
 
 ## The `N=4, Q=1` UART address is directly confirmed
 
@@ -114,8 +120,19 @@ Matches `cs1800.vhd`'s own pre-existing `io_out.vhd` wiring
 (`nWE => nmrd`) exactly, so this generalizes, not something specific to
 the CDP1854.
 
-**Next step**: run the real PRCX-18 ROM (kept local-only, see the top
-of this file) through `cs1800_console` in GHDL and watch for the CPU
-reaching its `>>` prompt in a bus-trace capture -- that, not real
-serial timing or physical hardware, is the meaningful "it worked"
+**First real boot attempt (2026-09-12)**: ran the actual ROM through
+`cs1800_console` in GHDL. Confirmed real port-A transactions matching
+the disassembly during the boot-time device-clear sweep, and the
+simulation genuinely completes the demanding full-64KB RAM-detection
+sweep (~8.6M clock cycles) before settling into the OS scheduler's
+task-dispatch loop -- no prompt yet at that point. Independently
+validated by the user's own real-hardware timing: real RAM-counting
+takes ~2-3 seconds, matching the simulation's 8.6M cycles at 4MHz
+(2.15s) almost exactly. The user also confirmed reaching the prompt
+does not depend on LC/timer interrupts (tested with the CPU board's
+`CLOCK OFF` switch either way) -- so a stall isn't an interrupt-wait
+issue. **Next step**: run substantially longer and watch specifically
+for `Dutch 1800 MicroProUsers` / `CS1800/PRCX-18` / `-SYS-Starting
+Console Task-` / `_08>` in the port-A transmit capture -- that, not
+real serial timing or physical hardware, is the meaningful "it worked"
 signal for this phase.
