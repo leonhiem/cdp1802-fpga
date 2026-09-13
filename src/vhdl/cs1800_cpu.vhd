@@ -51,7 +51,19 @@ ENTITY cs1800_cpu IS
     reset : IN STD_LOGIC;
     halt  : IN STD_LOGIC;
     single : IN STD_LOGIC;
-    run : IN STD_LOGIC
+    run : IN STD_LOGIC;
+
+    -- FPGA note (board-level use, see boards/cora-z7-07s/): a real
+    -- memory-ready wait-state input, using the CDP1802's own nWAIT/
+    -- PAUSE mechanism (control.vhd: "IF r.mode = c_PAUSE THEN --
+    -- pause" -- the state machine simply doesn't advance while
+    -- paused, same mechanism a real 1802 uses for slow memory) rather
+    -- than the halt bit above, which is a permanent system-level
+    -- pause, not a per-access one. Defaults to '0' (never wait), so
+    -- every existing instantiation (cs1800.vhd, and everything built
+    -- on it) is completely unaffected unless a board wires this to a
+    -- real "memory not ready yet" signal.
+    mem_wait : IN STD_LOGIC := '0'
   );
 END cs1800_cpu;
 
@@ -157,10 +169,10 @@ BEGIN
   nEF_i(3) <= nEF4_tmp;
 
 
-  p_mode : PROCESS(single, halt, reset, run, TPA_i)
+  p_mode : PROCESS(single, halt, reset, run, TPA_i, mem_wait)
   BEGIN
     IF run = '1' THEN
-      nWAIT <= '1';
+      nWAIT <= NOT mem_wait; -- '1' (no wait) when mem_wait='0', its default
       nCLEAR <= '1';
     ELSIF halt = '1' THEN
       nWAIT <= '0';

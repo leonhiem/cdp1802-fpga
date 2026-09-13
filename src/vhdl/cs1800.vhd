@@ -57,7 +57,17 @@ ENTITY cs1800 IS
     -- zeros OR'd in) so this doesn't require touching any existing
     -- instantiation.
     dbg_n        : OUT STD_LOGIC_VECTOR(2 DOWNTO 0);
-    io_data_in_ext : IN STD_LOGIC_VECTOR(7 DOWNTO 0) := (OTHERS => '0')
+    io_data_in_ext : IN STD_LOGIC_VECTOR(7 DOWNTO 0) := (OTHERS => '0');
+
+    -- FPGA note (board-level use, see boards/cora-z7-07s/): dbg_tpa
+    -- exposes the CDP1802's TPA pulse (already used internally above
+    -- to latch the address's high byte) so an external memory can tell
+    -- exactly when a new machine cycle -- and thus a new address --
+    -- starts. mem_wait is a straight pass-through to cs1800_cpu's own
+    -- mem_wait (see its header for what it does); defaults to '0'
+    -- (never wait), so this doesn't affect any existing instantiation.
+    dbg_tpa  : OUT STD_LOGIC;
+    mem_wait : IN STD_LOGIC := '0'
   );
 END cs1800;
 
@@ -111,7 +121,8 @@ BEGIN
     reset => reset,
     halt => halt,
     single => single,
-    run => run
+    run => run,
+    mem_wait => mem_wait
   );
 
   p_reg_high_addr : PROCESS(tpa, addr)
@@ -152,5 +163,6 @@ BEGIN
   dbg_sc       <= sc_i;
   dbg_tpb      <= tpb;
   dbg_n        <= n;
+  dbg_tpa      <= tpa;
 
 END str;

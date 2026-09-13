@@ -119,3 +119,64 @@ Reprogrammed, repeated the exact same reset/run/capture sequence:
   (including interrupt timing) comparison would need `LC` driven from
   the same schedule on both sides, which isn't needed to call this
   milestone done.
+
+## 2026-09-13: milestone 3 -- porting the real PRCX-18 bring-up towards hardware
+
+Goal: get the real PRCX-18 v1.9.0 ROM (already booting to its actual
+`_08>` prompt in simulation -- `doc/PRCX18_ANALYSIS.md`) up on real
+Cora hardware, motivated by the user pulling chips from the real rack
+and confirming a real minimum config: 1 EPROM (2764, 8KB) + 1 RAM
+(6264, 8KB) = 16KB, down from the rack's full 48KB.
+
+New files: `hdl/cs1800_prcx18_memory.vhd` (real split ROM/RAM, see its
+own header), `hdl/cs1800_prcx18_top.vhd` (wraps `cs1800`, unmodified,
+plus the new memory, one `cdp1854` on port A, and `cs1800_io_select`),
+`sim/tb_cs1800_prcx18_top.vhd`, `build_project_prcx18.tcl` (separate
+project, `cs1800_prcx18_bringup`, so the proven `cs1800_bringup`
+project is untouched), `program_prcx18.tcl`.
+
+**Wait-state attempt, abandoned.** First tried a real dual-port
+Block-RAM (synchronous read) with the CPU held off via `nWAIT`/PAUSE
+(added as new, additive, default-off ports on `cs1800_cpu.vhd`/
+`cs1800.vhd` -- `mem_wait`/`dbg_tpa`, zero effect on any existing
+instantiation, confirmed via full regression). This is architecturally
+the real 1802's own documented mechanism, but a per-access dynamic
+wait-state genuinely corrupted execution a few instructions in
+(reproducible: an address register read back undefined on the third
+machine cycle, root-caused down to cycle level but not fully explained
+-- see `cs1800_prcx18_memory.vhd`'s header). Abandoned rather than
+chase a subtle core-timing bug further; the `mem_wait`/`dbg_tpa` ports
+stay (harmless, unused, default-off) as this project's only capability
+in that direction for now.
+
+**LUTRAM instead, size vs. function tradeoff.** Back to the proven
+async-read, zero-timing-risk idiom (`ram.vhd`/`shared_ram.vhd`'s own
+timing). Full 8KB ROM (fixed) plus as much RAM as fits underneath this
+part's ~6000 LUT-as-Memory ceiling. Bisected both constraints in
+parallel (GHDL for function, Vivado synthesis-only for the resource
+number):
+
+| RAM size | Functional result (sim) | LUT-as-Memory (Vivado) |
+|---|---|---|
+| 1KB (256w) | FAIL -- stuck retrying "Starting Console Task" | not measured |
+| 1.5KB (384w) | FAIL -- same symptom | 5878/6000 (97.97%) |
+| 1.75KB (448w) | FAIL -- same symptom | not fully measured |
+| 2KB (512w) | **PASS** -- reaches a real `_00>` prompt | 6134/6000 (102.23%) |
+| 4KB (1024w) | **PASS** -- byte-identical to the full run | 7158/6000 (119.30%) |
+
+No size in the tested range satisfies both constraints at once -- the
+"fits" threshold and the "boots" threshold don't overlap. Per the
+user's explicit direction, stopped bisecting and shipped at 1.5KB
+(384 words) deliberately: fits the real part, but will only reach the
+boot banner before looping on the Console Task retry message, not the
+interactive prompt. A real fix (e.g. a correctly-debugged wait-state
+approach, or another architecture entirely) is future work.
+
+**Next**: run `build_project_prcx18.tcl` through a real bitstream,
+program the board, load the real ROM via `devmem` the same way
+`shared_ram` was loaded above, and watch the partial-boot behavior
+(banner + repeating "-SYS-Starting Console Task-") live on hardware --
+the explicit goal for this milestone is to observe that, not to fix it
+yet. Deferred beyond that: a real physical UART from the CDP1854 to
+external hardware (for now, `devmem`-polled AXI GPIO stands in), and
+SSH access to the Cora's Linux instead of serial console.
