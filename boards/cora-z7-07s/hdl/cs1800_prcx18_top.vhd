@@ -31,6 +31,23 @@
 --   AXI GPIO channels, so Linux can read transmitted bytes and inject
 --   received ones via devmem -- see boards/cora-z7-07s/README.md.
 --
+--   uart_tx_fifo_data/avail: cdp1854's raw tx_data_valid only pulses
+--   for one machine cycle (one TPB, ~320ns at this design's real 25MHz
+--   CLOCK -- confirmed empirically: 2000 back-to-back devmem polls of
+--   the raw signal via AXI GPIO caught nothing but 0, exactly as
+--   expected -- a Linux devmem round trip costs low-single-digit
+--   milliseconds, ~4 orders of magnitude too slow). This tiny FIFO
+--   (256 bytes, plain synchronous read/write -- infers Block RAM, not
+--   LUTRAM, so it doesn't compete with cs1800_prcx18_memory's budget
+--   at all) latches every byte cdp1854 transmits and holds it for
+--   software to drain at its own pace: uart_tx_fifo_avail is a level
+--   ('1' while the FIFO is non-empty), uart_tx_fifo_data is the head
+--   byte, and ctrl_in(7) (unused otherwise -- see the entity's other
+--   ctrl_in bits above) is edge-detected as a "pop" request. Purely
+--   additive: uart_tx_data/valid keep their original raw-pulse meaning
+--   unchanged, so tb_prcx18_lutram.vhd's/tb_cs1800_prcx18_top.vhd's use
+--   of those two ports is completely unaffected by this.
+--
 -------------------------------------------------------------------------------
 
 LIBRARY IEEE;
@@ -71,7 +88,12 @@ ENTITY cs1800_prcx18_top IS
     uart_tx_data      : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
     uart_tx_valid     : OUT STD_LOGIC;
     uart_rx_data      : IN  STD_LOGIC_VECTOR(7 DOWNTO 0) := (OTHERS => '0');
-    uart_rx_available : IN  STD_LOGIC := '0'
+    uart_rx_available : IN  STD_LOGIC := '0';
+
+    -- Software-drainable TX byte FIFO -- see header comment above for why
+    -- this exists alongside the raw uart_tx_data/valid pulse.
+    uart_tx_fifo_data  : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
+    uart_tx_fifo_avail : OUT STD_LOGIC
   );
 END cs1800_prcx18_top;
 
@@ -97,6 +119,22 @@ ARCHITECTURE str OF cs1800_prcx18_top IS
   SIGNAL io_sel_reg : STD_LOGIC_VECTOR(7 DOWNTO 0);
   SIGNAL uart_a_nsel : STD_LOGIC;
   SIGNAL uart_a_dout : STD_LOGIC_VECTOR(7 DOWNTO 0);
+
+  -- Raw cdp1854 TX pulse, before the FIFO -- see header comment. Fed
+  -- straight out on uart_tx_data/valid (unchanged) AND into the FIFO
+  -- push logic below.
+  SIGNAL uart_a_tx_data_i  : STD_LOGIC_VECTOR(7 DOWNTO 0);
+  SIGNAL uart_a_tx_valid_i : STD_LOGIC;
+
+  -- Software-drainable TX FIFO: plain synchronous read/write, 256
+  -- bytes -- see header comment for why (infers Block RAM, not LUTRAM,
+  -- so it's free with respect to cs1800_prcx18_memory's tight budget).
+  TYPE t_tx_fifo IS ARRAY (0 TO 255) OF STD_LOGIC_VECTOR(7 DOWNTO 0);
+  SIGNAL tx_fifo       : t_tx_fifo := (OTHERS => (OTHERS => '0'));
+  SIGNAL tx_fifo_wr    : UNSIGNED(7 DOWNTO 0) := (OTHERS => '0');
+  SIGNAL tx_fifo_rd    : UNSIGNED(7 DOWNTO 0) := (OTHERS => '0');
+  SIGNAL tx_fifo_count : UNSIGNED(8 DOWNTO 0) := (OTHERS => '0');
+  SIGNAL tx_fifo_pop_prev : STD_LOGIC := '0';
 
 BEGIN
 
@@ -192,9 +230,45 @@ BEGIN
     nOE  => ram_nmwr,
     rx_data           => uart_rx_data,
     rx_data_available => uart_rx_available,
-    tx_data       => uart_tx_data,
-    tx_data_valid => uart_tx_valid
+    tx_data       => uart_a_tx_data_i,
+    tx_data_valid => uart_a_tx_valid_i
   );
+
+  -- Raw pass-through, unchanged meaning -- see header comment.
+  uart_tx_data  <= uart_a_tx_data_i;
+  uart_tx_valid <= uart_a_tx_valid_i;
+
+  -- TX byte FIFO: push on every raw cdp1854 pulse, pop on a rising
+  -- edge of ctrl_in(7) (otherwise-unused) -- see header comment.
+  p_tx_fifo : PROCESS(CLOCK)
+    VARIABLE push : BOOLEAN;
+    VARIABLE pop  : BOOLEAN;
+  BEGIN
+    IF rising_edge(CLOCK) THEN
+      tx_fifo_pop_prev <= ctrl_in(7);
+
+      push := (uart_a_tx_valid_i = '1') AND (tx_fifo_count < 256);
+      pop  := (ctrl_in(7) = '1' AND tx_fifo_pop_prev = '0') AND (tx_fifo_count > 0);
+
+      IF push THEN
+        tx_fifo(to_integer(tx_fifo_wr)) <= uart_a_tx_data_i;
+        tx_fifo_wr <= tx_fifo_wr + 1;
+      END IF;
+
+      IF pop THEN
+        tx_fifo_rd <= tx_fifo_rd + 1;
+      END IF;
+
+      IF push AND NOT pop THEN
+        tx_fifo_count <= tx_fifo_count + 1;
+      ELSIF pop AND NOT push THEN
+        tx_fifo_count <= tx_fifo_count - 1;
+      END IF;
+    END IF;
+  END PROCESS;
+
+  uart_tx_fifo_data  <= tx_fifo(to_integer(tx_fifo_rd));
+  uart_tx_fifo_avail <= '0' WHEN tx_fifo_count = 0 ELSE '1';
 
   status_out <= "000000" & lc & Q;
 

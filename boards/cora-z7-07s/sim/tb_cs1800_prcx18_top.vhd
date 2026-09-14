@@ -8,13 +8,26 @@
 -- License: MIT
 --
 -- Description:
---   Same exact stimulus and expectations as tb_cs1800_top.vhd: this
---   design keeps ram.vhd/shared_ram.vhd's exact async-read timing (see
+--   Same exact stimulus as tb_cs1800_top.vhd, and this design keeps
+--   ram.vhd/shared_ram.vhd's exact async-read timing (see
 --   cs1800_prcx18_memory.vhd's header for why, after an earlier real-
---   Block-RAM/wait-state attempt was abandoned), so the trace this
---   produces is expected to be byte-for-byte identical to
---   sim/ghdl/reference/tb_cs1800_tpb.txt, same as every other *_dump
---   testbench in this repo -- run.sh diffs it directly.
+--   Block-RAM/wait-state attempt was abandoned) -- but the trace this
+--   produces is NOT expected to be byte-for-byte identical to
+--   sim/ghdl/reference/tb_cs1800_tpb.txt, unlike every other *_dump
+--   testbench in this repo. That golden reference's program (the old
+--   276-byte synthetic test program, test_program_pkg.vhd) self-
+--   modifies scratch bytes at addresses that now fall inside this
+--   design's ROM-protected region (it predates any ROM/RAM split);
+--   those writes are silently dropped here (matching a real EPROM's
+--   WE pin doing nothing), so once execution reaches code that
+--   branches on or otherwise depends on one of those never-modified
+--   bytes, the whole rest of the trace legitimately diverges -- not a
+--   bug, just an old test program that assumes unified RAM. This
+--   testbench is NOT wired into run.sh for that reason; it exists
+--   purely so a human can eyeball the design's structural behavior
+--   (see tb_prcx18_lutram.vhd, doc/cs1800_hardware_source, for the
+--   real correctness check: booting the real PRCX-18 ROM, which never
+--   touches its own ROM region).
 --
 -------------------------------------------------------------------------------
 

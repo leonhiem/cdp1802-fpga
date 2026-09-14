@@ -176,10 +176,15 @@ connect_bd_net [get_bd_pins axi_gpio_1/gpio_io_o] [get_bd_pins u_rx_data_slice/D
 connect_bd_net [get_bd_pins axi_gpio_1/gpio_io_o] [get_bd_pins u_rx_avail_slice/Din]
 connect_bd_net [get_bd_pins u_rx_data_slice/Dout]  [get_bd_pins cs1800_prcx18_top_0/uart_rx_data]
 connect_bd_net [get_bd_pins u_rx_avail_slice/Dout] [get_bd_pins cs1800_prcx18_top_0/uart_rx_available]
-# axi_gpio_1 channel 2 (input, 9 bits) <- uart_tx_data/valid, via the
-# xlconcat cell above (In0=tx_data[7:0], In1=tx_valid -> Dout[8:0]).
-connect_bd_net [get_bd_pins cs1800_prcx18_top_0/uart_tx_data]  [get_bd_pins u_tx_concat/In0]
-connect_bd_net [get_bd_pins cs1800_prcx18_top_0/uart_tx_valid] [get_bd_pins u_tx_concat/In1]
+# axi_gpio_1 channel 2 (input, 9 bits) <- the software-drainable TX
+# FIFO (uart_tx_fifo_data/avail), NOT the raw uart_tx_data/valid pulse
+# -- see cs1800_prcx18_top.vhd's header for why the raw pulse (one
+# machine cycle, ~320ns) can't be caught by a devmem poll loop, while
+# the FIFO's head byte + non-empty flag are stable until software pops
+# them via ctrl_in(7). Via the xlconcat cell above
+# (In0=fifo_data[7:0], In1=fifo_avail -> Dout[8:0]).
+connect_bd_net [get_bd_pins cs1800_prcx18_top_0/uart_tx_fifo_data]  [get_bd_pins u_tx_concat/In0]
+connect_bd_net [get_bd_pins cs1800_prcx18_top_0/uart_tx_fifo_avail] [get_bd_pins u_tx_concat/In1]
 connect_bd_net [get_bd_pins u_tx_concat/dout] [get_bd_pins axi_gpio_1/gpio2_io_i]
 
 # axi_bram_ctrl's BRAM_PORTA -> cs1800_prcx18_top's memory Port B.
