@@ -51,6 +51,7 @@ set src_files {
   src/vhdl/cs1800.vhd
   src/vhdl/cdp1854.vhd
   src/vhdl/cs1800_io_select.vhd
+  boards/cora-z7-07s/hdl/byte_fifo.vhd
   boards/cora-z7-07s/hdl/cs1800_prcx18_memory.vhd
   boards/cora-z7-07s/hdl/cs1800_prcx18_top.vhd
 }

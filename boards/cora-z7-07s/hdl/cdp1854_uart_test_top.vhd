@@ -50,7 +50,15 @@ ENTITY cdp1854_uart_test_top IS
 
     -- Debug taps, harmless to leave unconnected.
     dbg_serial_loop : OUT STD_LOGIC;
-    dbg_tx_active   : OUT STD_LOGIC
+    dbg_tx_active   : OUT STD_LOGIC;
+    dbg_drv_nCS     : OUT STD_LOGIC;
+    dbg_drv_nWE     : OUT STD_LOGIC;
+    dbg_drv_data    : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
+    dbg_cdp_tx_data  : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
+    dbg_cdp_tx_valid : OUT STD_LOGIC;
+    dbg_tx_fifo_avail : OUT STD_LOGIC;
+    dbg_tx_fifo_pop    : OUT STD_LOGIC;
+    dbg_tx_fifo_head    : OUT STD_LOGIC_VECTOR(7 DOWNTO 0)
   );
 END cdp1854_uart_test_top;
 
@@ -180,5 +188,14 @@ BEGIN
 
   rx_data <= rx_fifo_head;
   status_out <= "00000" & rx_fifo_avail & done_latched & drv_busy;
+
+  dbg_drv_nCS  <= drv_nCS;
+  dbg_drv_nWE  <= drv_nWE;
+  dbg_drv_data <= drv_data;
+  dbg_cdp_tx_data  <= cdp_tx_data;
+  dbg_cdp_tx_valid <= cdp_tx_valid;
+  dbg_tx_fifo_avail <= tx_fifo_avail;
+  dbg_tx_fifo_pop    <= tx_fifo_pop;
+  dbg_tx_fifo_head    <= tx_fifo_head;
 
 END str;

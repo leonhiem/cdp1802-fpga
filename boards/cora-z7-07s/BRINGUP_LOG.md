@@ -180,3 +180,79 @@ the explicit goal for this milestone is to observe that, not to fix it
 yet. Deferred beyond that: a real physical UART from the CDP1854 to
 external hardware (for now, `devmem`-polled AXI GPIO stands in), and
 SSH access to the Cora's Linux instead of serial console.
+
+## 2026-09-14: milestone 3b -- SSH bring-up, isolating cdp1854+UART, a real hardware-only bug found and fixed
+
+Programmed the 1.5KB build and ran it: reset/run control and ROM
+loading via `devmem` worked (confirmed on the ILA -- `ram_addr` cycles
+through a bounded range of real addresses, not stuck at reset or
+corrupted into garbage), but the raw `cdp1854` TX pulse (one machine
+cycle, ~320ns at 25MHz) turned out to be about 4 orders of magnitude
+too fast for any `devmem` round trip to catch -- 2000 back-to-back
+polls over the serial console caught nothing but 0. A later ILA
+capture (after switching to SSH) also showed the CPU had drifted into
+a tight two-address spin at `0xC253`/`0xC2C2`, far outside the real
+16KB window -- consistent with the RAM aliasing this design's memory
+map already documents, and a separate problem from the FIFO bug below.
+
+Switched to SSH+SCP (`root@10.0.0.43`, no `sshpass`/`expect` on this
+host, so a small stdlib-only `pty`-based Python wrapper does password
+auth) -- much more scriptable than the serial console, and it also
+answered a design question: only `/dev/ttyPS0` exists on this image
+(the console, already wired to the USB serial), so routing a real
+UART into a second PS7 UART via EMIO for a free `/dev/ttyPS1` would
+need devicetree changes not scoped here; kept as a future direction.
+
+Per plan, before trusting or chasing the CPU/RAM finding further:
+isolated `cdp1854` + a byte-FIFO bridge + a *real* bit-serial UART
+(`uart_tx.vhd`/`uart_rx.vhd`, 8N1 framing, fabric self-loopback, no
+physical pin yet) from the CDP1802 entirely, driven by
+`dummy_cpu_driver.vhd` (a tiny stand-in that pulses cdp1854's write
+bus exactly like a real 1802 `OUT` would) instead of the full CPU --
+`cdp1854_uart_test_top.vhd`, proven byte-exact in simulation first
+(`tb_cdp1854_uart_test_top.vhd`, `ALL CHECKS PASSED`), then built and
+programmed as its own small bitstream.
+
+First real-hardware run: 29 of 30 bytes came back exactly right, but
+byte 0 read as `0x00` instead of `0x48` ('H') -- every time, on repeat
+triggers of the same live bitstream, not a one-off. Localized it with
+a value-triggered `system_ila` capture (arm on a signal transition,
+then trigger the design over SSH while the ILA waits, decoupling JTAG
+and SSH timing entirely): a capture on the loopback serial line showed
+the wire itself carried all-zero data bits for the first frame, and a
+follow-up capture with probes on `cdp1854`'s write latch showed
+`cdp1854` correctly latched `0x48` -- so the corruption was between
+`cdp1854` and the wire. Adding probes on the FIFO's own `head`/`avail`
+nailed it: `avail` read '1' one cycle before `head` reflected the
+newly-written byte, so `uart_tx` (which pops on the very first cycle
+it sees `avail`) grabbed a stale value. Root cause: `byte_fifo.vhd`'s
+`head` output was described as a plain combinational alias of
+`mem(rd_ptr)` even though its own header already claimed a registered,
+Block-RAM read -- GHDL just executes the VHDL as literally written, so
+simulation never disagreed with itself, but Vivado's synthesis of that
+specific 256-deep array evidently didn't keep `head` and `avail` in
+lockstep. Fixed by actually registering both together in the same
+clocked process (matching the header's original intent), which also
+makes the two provably self-consistent regardless of how the
+underlying RAM/mux gets synthesized. Re-verified in simulation (fixed
+the testbench's own settling delay for the FIFO's new one-cycle-later
+timing) and on hardware: repeated runs now come back byte-for-byte
+exact -- `"Hello, CS1800 UART loopback!"`, all 30 bytes, every time.
+
+The exact same bug existed in `cs1800_prcx18_top.vhd`'s own hand-
+rolled copy of this FIFO (written before `byte_fifo.vhd` was factored
+out) -- refactored it to instantiate the shared, now-proven entity
+instead of carrying a second, drifted copy. Re-verified: byte-identical
+CPU/memory trace against the earlier known-good run, and the real
+PRCX-18 ROM boot test still reaches exactly the same point as before
+(full banner + `-SYS-Starting Console Task-`, then the known RAM-size
+retry loop) -- so this fix is behavior-preserving for the CPU/memory
+path and only ever mattered for the TX-FIFO byte-0 case it was found
+in.
+
+**Next**: rebuild and reprogram the full `cs1800_prcx18_top` bitstream
+with the fixed FIFO, then revisit the `0xC253`/`0xC2C2` CPU/RAM-
+aliasing hang on real hardware -- now that cdp1854+FIFO+UART is
+independently proven reliable, any further odd hardware behavior can
+be trusted to be a CPU/memory-path issue, not a confound from this
+FIFO bug.

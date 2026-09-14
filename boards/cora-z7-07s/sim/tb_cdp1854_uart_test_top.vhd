@@ -111,11 +111,13 @@ BEGIN
       WAIT UNTIL rising_edge(clk);
       ctrl_in(1) <= '0';
       WAIT UNTIL rising_edge(clk);
-      -- One more full cycle so `head`'s combinational read of the
-      -- just-popped rd_ptr has settled before the next iteration reads
-      -- rx_data -- real software (a devmem read, milliseconds after
-      -- the write that popped) never races this; this is purely to
-      -- keep the testbench's own sampling honest.
+      -- Two more full cycles so byte_fifo's now-registered head/avail
+      -- (see its own header for why both are registered, not just
+      -- one) have settled after the just-issued pop, before the next
+      -- iteration reads rx_data -- real software (a devmem read,
+      -- milliseconds after the write that popped) never races this;
+      -- this is purely to keep the testbench's own sampling honest.
+      WAIT UNTIL rising_edge(clk);
       WAIT UNTIL rising_edge(clk);
     END LOOP;
 
