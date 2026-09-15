@@ -423,3 +423,63 @@ state issue (e.g. AXI interconnect or reset-network state left over
 from repeated reconfiguration) and the original PRCX-18 boot test
 (bug #1/#2 fixes, milestone 3d) needs to be re-run from a clean boot
 before drawing any conclusion about them.
+
+## 2026-09-15: milestone 3f -- correction: 3e's "instant hang" was a bad capture method, not a real symptom
+
+Power-cycled the board as planned. The retest (`cs1800_top`+`shared_ram`,
+freshly rebuilt) **still** showed the same oscillation
+(`0x0000`/`0x0022`/`0x0023`) right after power-cycling -- ruling out
+3e's rig/PS7-state theory too.
+
+The actual problem was the capture method, not the board or the RTL:
+every capture in 3e used `run_hw_ila -trigger_now`, which grabs
+whatever is on the bus *at the moment Vivado happens to connect* --
+seconds after `devmem` released run, over a separate SSH round trip.
+None of those captures ever actually watched execution *start*; they
+could easily be sampling a state the CPU reached and settled into long
+after the interesting part was over.
+
+Redid it the way milestone 1/2's own successful captures always did it
+(`doc/CS1800_HARDWARE.md`'s and this file's own earlier entries --
+arm the ILA trigger *first*, on `TPB`'s first rising edge, *then*
+release run): a single Tcl script (`set_property
+TRIGGER_COMPARE_VALUE {eq'b1} $tpb_probe`, `run_hw_ila` to arm, `exec`
+the `devmem` release over `ssh` from inside the same script so there's
+no cross-process race, then `wait_on_hw_ila`) on the freshly-rebuilt,
+power-cycled `cs1800_top`+`shared_ram` control. Result, compared
+directly against `sim/ghdl/reference/tb_cs1800_tpb.txt`:
+
+- **First 46 TPB rows match the golden reference exactly** -- same as
+  the original 2026-09-11 milestone 2b (which never checked further).
+- Execution keeps going correctly well past that: ~500 TPB pulses
+  captured, working through what's recognizably a real copy-loop (a
+  fetch pointer and a second, `R2`-based write pointer both climbing
+  in lockstep from roughly `0x28` to `0xA6`) -- further than this
+  design has ever actually been checked against the golden reference
+  before.
+- It reliably (reproduced identically twice, back to back) ends up at
+  `0x00F1`, executing what looks like `IDL` (opcode `0x00`) and
+  parking there. Confirmed against the golden reference: address
+  `0x00F0`/`0x00F1` **never appears anywhere in the whole 526-line
+  correct trace** -- the real program is supposed to skip that dead
+  filler region entirely via an unconditional long branch (`LBR` at
+  `0x00C1`, jumping straight to `0x0100`, confirmed in the golden
+  trace) and never touch it. So parking at `0x00F1` is a real,
+  reproducible deviation, not expected behavior -- it just happens far
+  later, after far more correct execution, than milestone 3e's flawed
+  captures made it look.
+
+Corrects 3e's headline conclusion: this is not "everything hangs
+almost instantly," and it was never a rig/power-cycle issue. The
+design executes a long, non-trivial, correct instruction sequence on
+today's exact same rig; there's a specific, real, reproducible branch/
+skip failure somewhere between address `~0xA6` and `0x00F1` that has
+never been isolated before (nobody checked this design past address
+`0xC3` until today). 3e's bisection results (which bitstream fails)
+are therefore uninformative and should not be used to rule anything in
+or out -- they were all `trigger_now` snapshots of unknown vintage.
+
+**Next**: keep bisecting with the *from-start* triggered-capture
+method (not `trigger_now`) toward the exact address where control flow
+first diverges from the golden reference's fetch-address sequence,
+somewhere between `0xA6` and `0x00C1`'s `LBR`.
