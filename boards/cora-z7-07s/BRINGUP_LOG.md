@@ -313,3 +313,58 @@ Console Task -- see this file's size/tradeoff table and
 `cs1800_prcx18_memory.vhd`'s header) and reprogram real hardware to
 confirm the `0xC253`/`0xC2C2` spin is actually gone there too, not just
 absent from a simulation that never modeled it in the first place.
+
+## 2026-09-15: milestone 3d -- rebuilt and reprogrammed real hardware with both fixes; found a new, earlier hang
+
+Rebuilt `build_project_prcx18.tcl` clean (LUT-as-Memory: 5473/6000,
+91.22% -- comfortably fits now that 384 is gone) and reprogrammed the
+board over JTAG (`program_prcx18.tcl`). Loaded the real ROM via
+`gen_load_prcx18_rom.py` + `busybox devmem` (no python on this
+PetaLinux image -- committed here, ROM binary itself stays local/
+gitignored) and released reset+run (`ctrl_in = 0x68`, same as
+`tb_prcx18_lutram.vhd`'s stimulus). Read back several loaded ROM words
+afterward -- byte-exact match, so the load path itself is solid.
+
+Result: no UART output at all, ever -- `drain_uart_fifo.sh` (also
+committed) polled the TX FIFO for thousands of iterations across
+several separate attempts and never saw `avail` go high, even though
+`status_out`'s `LC` bit was visibly toggling (so the design's own
+clock/reset infrastructure is alive).
+
+Captured a `system_ila` snapshot (`capture_ila_prcx18.tcl`, committed
+-- `run_hw_ila -trigger_now` needs no pre-armed trigger condition, just
+grabs whatever's happening right now) on `ram_addr`/`data`/`nMRD`/
+`nMWR`/`SC`/`TPB`. Verdict: the CPU is stuck fetching the *same*
+instruction at `0x0090` (opcode `0x73`, `STXD` -- confirmed against the
+real ROM dump) over and over, forever -- `SC` alternates S0/S1 (so it's
+not frozen in reset), but the fetch address never advances past
+`0x0090`/`0x0091` across the whole 4096-sample capture. `0x0090` is
+straight-line register-save code (`STXD`/`GHI`/`PHI`, no branches
+nearby in the disassembly) very early in PRCX-18's own boot sequence --
+nowhere near where the old `0xC253`/`0xC2C2` aliasing spin happened,
+and well inside the ROM region, so this isn't the RAM/mem address-
+decode path bug #1/#2 fixed this session.
+
+This is a **new, earlier, real-hardware-only symptom**: `tb_prcx18_lutram.vhd`
+runs this exact RTL, this exact ROM, this exact `ctrl_in` sequence, and
+reaches the full boot banner in GHDL without incident -- so whatever's
+wrong here is (once again) a synthesis-only hazard GHDL's zero-delay
+simulation can't see, not a logic error in the VHDL as literally
+written. Root cause not yet found. Given today's pattern (two
+unregistered-mux/non-power-of-two hazards already found and fixed in
+the memory path), the most likely place to look next is still
+somewhere in the CPU/control sequencing (`cs1800_cpu.vhd`/
+`control.vhd`) rather than the memory design just re-verified in
+simulation -- but that's a real guess, not yet confirmed by bisection.
+
+**Status**: build/program/ROM-load pipeline is solid and now has
+committed, reusable tooling (`gen_load_prcx18_rom.py`,
+`drain_uart_fifo.sh`, `capture_ila_prcx18.tcl`). Whether today's two
+memory-decode fixes actually solved the original `0xC253`/`0xC2C2`
+problem is **still unconfirmed** -- this new, earlier hang blocks
+execution before the CPU ever gets far enough to reach that address
+range again. Next investigation: more ILA probes (e.g. the CPU's
+instruction register / N-lines, P/X register values) to see what's
+actually preventing `P` from advancing past `0x0090`, or a hand
+bisection of `cs1800_cpu.vhd`'s combinational paths the same way
+`byte_fifo.vhd`'s bug was found.
