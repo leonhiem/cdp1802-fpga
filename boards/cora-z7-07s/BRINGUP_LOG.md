@@ -1084,3 +1084,80 @@ real-hardware bugs (3g/3h, the OR-merge fix) remain fixed and verified
 on hardware; the `A_full`/Block-RAM memory redesign itself is new,
 unverified on real silicon beyond "it boots partway and then hits this
 new loop," and should not yet be considered proven there.
+
+## 2026-09-15: confirmed gap -- interrupts/EF2 are not wired to anything real
+
+The user asked directly (having re-examined the SIO board schematic:
+`cdp1854`'s real `INT` output pulls both the shared bus `INT` line and
+`EF2`) whether this design actually implements that. Checked the code
+rather than assuming:
+
+- `cs1800.vhd`: `SIGNAL nINT : STD_LOGIC := '1';` -- hardcoded
+  permanently inactive, purely internal, **not even exposed as an
+  entity port**. There is currently no path to inject a real interrupt
+  into any board-level design at all (`cdp18.vhd`, used only by
+  simulation-only testbenches like `tb_cdp18.vhd`, is the only place
+  in this repo that actually exposes a real `nINT` input).
+- `cdp1854.vhd` has no interrupt output pin modeled -- only
+  `tx_data_valid`/`rx_data_available`, this project's own internal
+  handshake signals, nothing resembling the real chip's `INT` pin.
+- `nEF` (carrying `EF2`) is `ctrl_in(6 DOWNTO 4)` in every
+  `cs1800_*_top.vhd` -- a static, software-fixed value set once at
+  boot (`"110"`), never updated dynamically from anything. It does not
+  reflect `cdp1854`'s real status.
+
+**Confirmed separately, also directly from the code**: the `N=4,Q=1`
+address decode (`sel4_n <= '0' WHEN (n_i = "100" AND Q = '1') ELSE
+'1';`, `cs1800_prcx18_top.vhd`) matches the real unit's jumper "14"
+setting exactly -- no discrepancy there.
+
+**Not the cause of milestone 3m's hang** (that happens before any UART
+I/O is attempted, in an early ROM checksum loop) but a real,
+confirmed architectural gap that will block genuine interactive
+console I/O once boot itself is fixed, if PRCX-18's console driver
+turns out to be interrupt-driven rather than polled -- see the next-
+step plan below.
+
+## Next-step plan (2026-09-15)
+
+In priority order:
+
+1. **Resolve milestone 3m's hang** (blocks everything else). Two
+   parallel-viable approaches, not mutually exclusive:
+   - Disassemble PRCX-18's actual ROM/RAM-sizing routine at
+     `0x0000`-`0x00C1`-ish to understand its real termination
+     condition (what should make `BNZ 4B` at `0x0044` finally trigger)
+     -- this alone might reveal the bug is a real firmware
+     expectation this design doesn't meet, independent of BRAM
+     collision behavior.
+   - Add real register-level `system_ila` probes to
+     `build_project_prcx18.tcl` (this project never got the
+     `tmp_page`/`R_in`/`forceS1`/`extraS1`/`RB`-equivalent visibility
+     `build_project.tcl` gained in milestone 3i) and rebuild, to watch
+     the actual compared values live rather than reasoning from fetch
+     addresses alone.
+2. **XDC timing constraints file** -- still outstanding, per the
+   user's original request (milestone 3l's writeup flagged this as
+   not yet done). Worth doing once the current hang is understood,
+   not before -- a hang caused by a real logic/collision issue
+   wouldn't be fixed by timing constraints, and closing timing on a
+   design that's about to change again is wasted effort.
+3. **Wire real interrupts**: add an `INT` output to `cdp1854.vhd`
+   (real chip behavior -- asserted per its control-register enable
+   bits and TX-empty/RX-full status, see `doc/CDP1854_UART.md`), a
+   real `nINT` input port to `cs1800.vhd`/`cs1800_prcx18_top.vhd`
+   (currently doesn't exist), and make `EF2` a live reflection of that
+   same signal (matching the real SIO board's "int. select" jumper --
+   already documented as `EF2` for this unit, see
+   `doc/CS1800_HARDWARE.md`) instead of `ctrl_in`'s static bit. Needed
+   before real interactive console I/O can work if PRCX-18's driver is
+   interrupt-driven; not needed to reach the boot prompt itself
+   (milestone 3l's simulation success got there with `nEF` static the
+   whole time).
+4. Once boot succeeds on real hardware: re-run the from-start ILA
+   capture / `compare_ila_to_golden.py` methodology against the real
+   ROM's own expected trace (would need a simulation-side per-TPB dump
+   for the real ROM, which doesn't exist yet -- `tb_prcx18_lutram.vhd`
+   only logs every 2000th TPB) to confirm real hardware matches
+   simulation all the way to the prompt, not just "the UART eventually
+   prints the right text."
