@@ -978,3 +978,28 @@ same way milestone 3f/3g did -- this is the real test of whether
 today's whole line of investigation, starting from the user's own
 schematic reading, actually closes the gap between simulation and real
 silicon.
+
+**Immediate follow-up**: the first real build attempt failed outright
+at DRC (`place_design` refused to run): `LUT as Memory` and `LUT as
+Distributed RAM` both massively over-budget (9070/6000, 8622/6000) --
+Vivado's own synthesis log showed `cs1800_prcx18_memory`'s 4K x 32
+`mem` array still mapped to **Distributed RAM** (`RAM128X1D x 2048`),
+not Block RAM at all, despite Port A's read now being registered.
+Root cause: **Port B's read was still combinational/unregistered**
+(left that way deliberately, reasoning "`axi_bram_ctrl` already
+tolerates it") -- but a single VHDL array with one read port
+async and the other synchronous cannot map to a single real Block RAM
+primitive at all (a real BRAM's read ports are always registered, on
+every port), so Vivado fell back to distributed RAM for the *whole*
+array to satisfy both ports. Fixed by registering Port B's read too,
+in `cs1800_prcx18_memory.vhd` and `shared_ram.vhd` (gated on `b_en`,
+same "register word+select together" shape as Port A) -- also the
+more *correct* choice on its own terms, since `axi_bram_ctrl`'s native
+BRAM_PORTA interface (`SINGLE_PORT_BRAM` mode) is designed against a
+real, registered Block RAM's actual latency already, not zero.
+`tb_shared_ram.vhd` needed updating (its Port B checks assumed an
+immediate, ungated read -- added `b_en`+one clock edge before each
+one). Full regression green again (`sim/ghdl/run.sh`,
+`boards/cora-z7-07s/sim/run.sh`), and the local `tb_prcx18_lutram.vhd`
+re-run confirms the real prompt is still reached with this change.
+Rebuilding for real hardware now.

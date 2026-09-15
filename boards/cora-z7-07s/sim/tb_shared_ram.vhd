@@ -95,8 +95,13 @@ BEGIN
     -- The pre-loaded test program must actually be visible through
     -- Port B (the byte-lane adapter's init_mem path), not just Port A
     -- (which every cs1800_top testbench already exercises) -- byte 0
-    -- of address 0 is c_DIS = 0x71.
+    -- of address 0 is c_DIS = 0x71. Port B's read is registered
+    -- (2026-09-15, see shared_ram.vhd's own header) -- gated on b_en
+    -- and needs one clock edge to settle, not just a delta-cycle.
     b_addr <= X"0000";
+    b_en   <= '1';
+    WAIT UNTIL rising_edge(clk);
+    b_en   <= '0';
     WAIT FOR 1 ns;
     check(b_dout(7 DOWNTO 0) = X"71", "test program not visible at address 0 via Port B");
 
@@ -112,7 +117,10 @@ BEGIN
     b_we <= "0000";
     WAIT UNTIL rising_edge(clk);
 
-    -- Port B read-back of the same word.
+    -- Port B read-back of the same word (registered -- see above).
+    b_en <= '1';
+    WAIT UNTIL rising_edge(clk);
+    b_en <= '0';
     WAIT FOR 1 ns;
     check(b_dout = X"DDCCBBAA", "Port B full-word read-back mismatch");
 
@@ -165,12 +173,18 @@ BEGIN
     WAIT UNTIL rising_edge(clk);
 
     b_addr <= X"0900";
+    b_en   <= '1';
+    WAIT UNTIL rising_edge(clk);
+    b_en   <= '0';
     WAIT FOR 1 ns;
     check(b_dout(7 DOWNTO 0) = X"42", "Port B should see Port A's write");
 
     -- The scratch writes above must not have aliased onto the test
     -- program's own address range.
     b_addr <= X"0000";
+    b_en   <= '1';
+    WAIT UNTIL rising_edge(clk);
+    b_en   <= '0';
     WAIT FOR 1 ns;
     check(b_dout(7 DOWNTO 0) = X"71", "test program corrupted by scratch-address writes");
 

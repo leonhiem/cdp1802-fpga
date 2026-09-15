@@ -129,6 +129,9 @@ ARCHITECTURE str OF shared_ram IS
   SIGNAL a_lane_reg : STD_LOGIC_VECTOR(1 DOWNTO 0);
   SIGNAL a_sel_reg  : STD_LOGIC;
 
+  -- Port B's registered read state -- see the read process below.
+  SIGNAL b_dout_reg : STD_LOGIC_VECTOR(31 DOWNTO 0);
+
 BEGIN
 
   -- Only the low 12 address bits are used (4KB) -- see the FPGA note above.
@@ -191,8 +194,20 @@ BEGIN
                 a_word_reg(23 DOWNTO 16) WHEN a_lane_reg = "10" ELSE
                 a_word_reg(31 DOWNTO 24);
 
-  -- Port B read: the whole word, one array read, no concatenation of
-  -- separate elements.
-  b_dout <= mem(to_integer(unsigned(b_addr(11 DOWNTO 2))));
+  -- Port B read: registered too, 2026-09-15 (see
+  -- cs1800_prcx18_memory.vhd's header for why a single VHDL array
+  -- with one port async and the other synchronous can't map to one
+  -- real Block RAM primitive at all -- confirmed directly by Vivado
+  -- falling back to distributed RAM for the whole array otherwise).
+  PROCESS (clk) IS
+  BEGIN
+    IF rising_edge(clk) THEN
+      IF b_en = '1' THEN
+        b_dout_reg <= mem(to_integer(unsigned(b_addr(11 DOWNTO 2))));
+      END IF;
+    END IF;
+  END PROCESS;
+
+  b_dout <= b_dout_reg;
 
 END str;

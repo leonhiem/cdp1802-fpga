@@ -178,6 +178,9 @@ ARCHITECTURE str OF cs1800_prcx18_memory IS
   SIGNAL a_lane_reg : STD_LOGIC_VECTOR(1 DOWNTO 0);
   SIGNAL a_sel_reg  : STD_LOGIC;
 
+  -- Port B's registered read state -- see the read process below.
+  SIGNAL b_dout_reg : STD_LOGIC_VECTOR(31 DOWNTO 0);
+
 BEGIN
 
   eff_addr    <= b_addr WHEN sel_ext = '1' ELSE a_address;
@@ -258,11 +261,33 @@ BEGIN
                 a_word_reg(23 DOWNTO 16) WHEN a_lane_reg = "10" ELSE
                 a_word_reg(31 DOWNTO 24);
 
-  -- Port B read: the whole word, one array read off the same single
-  -- muxed index, no concatenation of separate elements. Left
-  -- combinational/unregistered -- see file header.
-  b_dout <= mem(c_rom_words + to_integer(unsigned(b_addr(c_ram_addr_bits + 1 DOWNTO 2))))
-              WHEN b_addr(15 DOWNTO 13) /= "000" ELSE
-            mem(to_integer(unsigned(b_addr(12 DOWNTO 2))));
+  -- Port B read: registered too, 2026-09-15 -- see this file's header.
+  -- A single VHDL array with one port reading async and the other
+  -- synchronous cannot map to one real Block RAM primitive at all (a
+  -- real BRAM's read ports are always registered); left as
+  -- combinational at first because "axi_bram_ctrl already tolerates
+  -- it," this alone was enough to force Vivado to infer the *whole*
+  -- 4K x 32 array as distributed RAM again (confirmed directly in the
+  -- synthesis log's own RAM mapping report) and fail the LUTRAM
+  -- budget DRC check outright at this size. Registering this port too
+  -- is also the more correct choice on its own terms:
+  -- axi_bram_ctrl's native BRAM_PORTA interface (SINGLE_PORT_BRAM mode,
+  -- see build_project_prcx18.tcl) is designed against a real,
+  -- registered Block RAM's actual 1-cycle latency already, not
+  -- assuming zero.
+  PROCESS (clk) IS
+  BEGIN
+    IF rising_edge(clk) THEN
+      IF b_en = '1' THEN
+        IF b_addr(15 DOWNTO 13) /= "000" THEN
+          b_dout_reg <= mem(c_rom_words + to_integer(unsigned(b_addr(c_ram_addr_bits + 1 DOWNTO 2))));
+        ELSE
+          b_dout_reg <= mem(to_integer(unsigned(b_addr(12 DOWNTO 2))));
+        END IF;
+      END IF;
+    END IF;
+  END PROCESS;
+
+  b_dout <= b_dout_reg;
 
 END str;
