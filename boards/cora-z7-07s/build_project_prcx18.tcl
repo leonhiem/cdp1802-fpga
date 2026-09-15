@@ -111,12 +111,15 @@ set_property CONFIG.SINGLE_PORT_BRAM {1} $axi_bram_ctrl_0
 set cs1800_prcx18_top_0 [create_bd_cell -type module -reference cs1800_prcx18_top cs1800_prcx18_top_0]
 # 50 Hz LC at CLOCK = 25 MHz -- see build_project.tcl's own comment.
 set_property CONFIG.g_lc_half_period {250000} $cs1800_prcx18_top_0
-# g_ram_words left at its entity default (384 = 1.5KB) -- see
-# cs1800_prcx18_memory.vhd's header for the full story: this fits the
-# LUTRAM budget (measured ~98%) but is functionally short of what
-# PRCX-18 needs to fully start its Console Task (2KB does, but doesn't
-# fit -- ~102%). Building at 1.5KB anyway, deliberately, to watch the
-# real, partial boot behavior on actual hardware before revisiting.
+# g_ram_words left at its entity default (256 = 1KB) -- see
+# cs1800_prcx18_memory.vhd's header for the full story: the original
+# 384-word (1.5KB, non-power-of-two) choice caused a real hardware-only
+# address-decode bug (a modulo divider glitching the combinational read
+# path); fixed by requiring a power of two, which also drops capacity
+# a bit. Still functionally short of what PRCX-18 needs to fully start
+# its Console Task (2KB does, but doesn't fit the ~6000-LUT budget --
+# ~102%). Building at 1KB anyway, deliberately, now that it's at least
+# deterministic, to watch the real boot behavior on actual hardware.
 
 # --- Bit-slice/concat glue for axi_gpio_1's two 9-bit channels: get_bd_pins'
 # own [n:m] bit-range syntax collides with Tcl's own bracket parsing when

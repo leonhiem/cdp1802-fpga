@@ -58,7 +58,7 @@ USE IEEE.NUMERIC_STD.ALL;
 ENTITY cs1800_prcx18_top IS
   GENERIC (
     g_lc_half_period : POSITIVE := 1_000_000; -- CLOCK cycles per LC half-period
-    g_ram_words      : INTEGER := 384 -- 32-bit words of RAM above the 8KB ROM (1.5KB -- fits this part's LUTRAM budget; see cs1800_prcx18_memory.vhd's header for the full size/tradeoff story)
+    g_ram_words      : INTEGER := 256 -- 32-bit words of RAM above the 8KB ROM (256 = 1KB, 4 full CDP1802 pages -- MUST be a power of two, see cs1800_prcx18_memory.vhd's header for why)
   );
   PORT (
     CLOCK      : IN  STD_LOGIC;

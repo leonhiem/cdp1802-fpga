@@ -24,12 +24,7 @@
 --   rack.
 --
 --   So: the full 8KB ROM (fixed -- that's the real firmware) plus as
---   much RAM as comfortably fits underneath that LUTRAM ceiling. Two
---   separate power-of-two arrays (not one combined array), so both
---   stay simple bit-sliced/masked address decodes: ROM covers
---   0x0000-0x1FFF exactly, RAM starts at 0x2000 and aliases within its
---   own (much smaller) window above that, the same "smaller-than-the-
---   full-address-space" idiom shared_ram.vhd already uses.
+--   much RAM as comfortably fits underneath that LUTRAM ceiling.
 --
 --   How much RAM PRCX-18 actually needs vs. how much fits (both found
 --   empirically, in simulation for function and in real Vivado
@@ -44,14 +39,6 @@
 --                          detect available RAM and degrade gracefully
 --                          rather than require a fixed amount).
 --     1.5KB (384 words) -- functionally FAILS, same symptom as 1KB.
---                          Fits the LUTRAM budget: 5878/6000 LUT-as-
---                          Memory (97.97%). THIS IS THE CURRENT DEFAULT
---                          -- chosen deliberately even though it's
---                          functionally short, to bring up real
---                          hardware and watch the partial-boot behavior
---                          live before spending more time on a proper
---                          fix (see cs1800_prcx18_top.vhd's header and
---                          the project README for the plan).
 --     1.75KB (448 words) -- also functionally FAILS (same symptom),
 --                          confirmed but not fully bisected past this.
 --     2KB  (512 words)  -- functionally SUCCEEDS: reaches a real
@@ -67,10 +54,50 @@
 --   So within the tested range, no single size fits the resource
 --   budget AND fully boots PRCX-18 -- the threshold for "fits" sits
 --   somewhere below 1.75KB and the threshold for "boots" sits somewhere
---   above 1.75KB, i.e. they don't overlap. Deliberately shipping at
---   1.5KB for now (fits, partial boot) rather than continuing to
---   bisect; a real fix (e.g. a corrected wait-state/Block-RAM approach)
---   is future work, not attempted here.
+--   above 1.75KB, i.e. they don't overlap. A real fix (e.g. a corrected
+--   wait-state/Block-RAM approach) is future work, not attempted here.
+--
+--   Real hardware-only bug #1 found and fixed, 2026-09-14: the original
+--   384-word (1.5KB) choice -- not a power of two, picked purely to
+--   hit the LUTRAM budget as closely as possible -- forced the RAM
+--   index's address decode to compute a genuine subtract-then-MOD-384
+--   (a non-power-of-two modulo needs a real combinational divider, not
+--   a bit-slice) on *every* read, unconditionally, even ROM ones. Fixed
+--   by requiring a power of two there (256 words) -- a real, verified
+--   improvement (the CPU ran measurably further before the next hang),
+--   but not sufficient on its own -- see bug #2.
+--
+--   Real hardware-only bug #2 found and fixed, 2026-09-14: even with
+--   bug #1's fix, this file still kept ROM and RAM as two *separate*
+--   arrays, each read unconditionally on every access, combined via a
+--   data-level 2:1 mux (selecting between rom(rom_idx) and ram(ram_idx)
+--   -- see git history for the exact prior shape). That's a shape no
+--   previously-proven design here (ram.vhd, shared_ram.vhd) ever uses.
+--   The hazard: even while a_is_rom's *value* stays constant (e.g. the
+--   whole time execution stays inside ROM), the mux's other input
+--   (ram(ram_idx)) is still a live signal changing on every address
+--   transition -- an unregistered 2:1 mux with a constantly-changing
+--   "losing" input is a textbook static-hazard setup, independent of
+--   how simple that input's own address decode is. On real hardware
+--   this looked like the CPU hanging in a tight 2-address loop, stuck
+--   in the execute state (SC never returning to fetch) -- confirmed via
+--   ILA, GHDL again saw nothing (zero-delay simulation can't model this
+--   at all). Fixed by merging rom and ram into one array (mem) and
+--   muxing the *index* once before a single read, never the data after
+--   two independent reads -- exactly the same safe idiom the write side
+--   (and shared_ram.vhd generally) already used. Now there is exactly
+--   one array, one read, matching shared_ram.vhd's proven shape as
+--   closely as a write-protected ROM region allows.
+--
+--   Separate, real hazard worth remembering (not what either bug above
+--   was, but inherent to ANY undersized RAM window here): PRCX-18 was
+--   written assuming the real backplane's full, non-aliased 48-56KB of
+--   SRAM. Whatever fraction of that we can't fit gets aliased -- two
+--   pages the firmware believes are completely distinct can be the
+--   same physical bytes here. That's silent cross-page corruption, not
+--   just a capacity shortfall, and it doesn't go away by picking a
+--   power of two -- only by eventually fitting enough real, non-aliased
+--   RAM to match what the firmware assumes.
 --
 --   Port A: CPU-facing, same signature and timing as ram.vhd/
 --   shared_ram.vhd's (async read, synchronous write, single-port
@@ -88,12 +115,13 @@
 LIBRARY IEEE;
 USE IEEE.std_logic_1164.ALL;
 USE IEEE.numeric_std.ALL;
+USE IEEE.math_real.ALL;
 USE work.test_program_pkg.ALL;
 
 
 ENTITY cs1800_prcx18_memory IS
   GENERIC (
-    g_ram_words : INTEGER := 384 -- 32-bit words of RAM above the 8KB ROM (384 = 1.5KB, fits this part's LUTRAM budget but functionally short -- see this file's header for the full size/tradeoff table; cs1800_prcx18_top.vhd always passes its own generic through anyway)
+    g_ram_words : INTEGER := 256 -- 32-bit words of RAM above the 8KB ROM (256 = 1KB, 4 full CDP1802 pages -- MUST be a power of two, see this file's header's "bug #1" note; cs1800_prcx18_top.vhd always passes its own generic through anyway)
   );
   PORT (
     clk     : IN STD_LOGIC;
@@ -119,6 +147,16 @@ ARCHITECTURE str OF cs1800_prcx18_memory IS
 
   CONSTANT c_rom_size  : INTEGER := 8192; -- bytes -- fixed, matches the real 2764
   CONSTANT c_rom_words : INTEGER := c_rom_size / 4; -- 2048
+  CONSTANT c_mem_words : INTEGER := c_rom_words + g_ram_words; -- one unified array
+
+  -- g_ram_words MUST be a power of two -- see this file's header's
+  -- "bug #1" note. c_ram_addr_bits is how many low address bits (above
+  -- the byte-lane's low 2) actually index the RAM's own local offset
+  -- within its window; every bit above that is simply ignored
+  -- (aliased), the exact same zero-arithmetic bit-slice idiom
+  -- shared_ram.vhd/ram.vhd use -- no subtract, no modulo, nothing that
+  -- needs a real divider.
+  CONSTANT c_ram_addr_bits : INTEGER := integer(round(log2(real(g_ram_words))));
 
   TYPE t_word_array IS ARRAY (NATURAL RANGE <>) OF STD_LOGIC_VECTOR(31 DOWNTO 0);
 
@@ -126,8 +164,8 @@ ARCHITECTURE str OF cs1800_prcx18_memory IS
   -- endian, purely so a from-scratch simulation build has *something*
   -- sensible at address 0 -- the real ROM is loaded via Port B at
   -- runtime (see file header), never embedded here.
-  FUNCTION init_rom RETURN t_word_array IS
-    VARIABLE result : t_word_array(0 TO c_rom_words - 1) := (OTHERS => X"00000000");
+  FUNCTION init_mem RETURN t_word_array IS
+    VARIABLE result : t_word_array(0 TO c_mem_words - 1) := (OTHERS => X"00000000");
   BEGIN
     FOR i IN c_test_program'RANGE LOOP
       CASE (i MOD 4) IS
@@ -140,13 +178,18 @@ ARCHITECTURE str OF cs1800_prcx18_memory IS
     RETURN result;
   END FUNCTION;
 
-  SIGNAL rom : t_word_array(0 TO c_rom_words - 1) := init_rom;
-  SIGNAL ram : t_word_array(0 TO g_ram_words - 1) := (OTHERS => X"00000000");
+  -- ONE array covering both regions -- see this file's header's "bug
+  -- #2" note for why this replaced two separate (rom, ram) arrays.
+  -- Indices 0 TO c_rom_words-1 are the (write-protected) ROM region;
+  -- c_rom_words TO c_mem_words-1 is RAM.
+  SIGNAL mem : t_word_array(0 TO c_mem_words - 1) := init_mem;
 
   -- Effective (arbitrated) access, in the same "word index + 4-lane
   -- byte-enable" shape shared_ram.vhd uses -- see its own header for
   -- why this one-canonical-write-pattern shape is what Vivado's
-  -- inference actually recognizes.
+  -- inference actually recognizes. eff_idx is a single, muxed INDEX
+  -- into the one mem array -- never two independently-read arrays
+  -- combined by a data-level mux (that was bug #2).
   SIGNAL eff_addr    : STD_LOGIC_VECTOR(15 DOWNTO 0);
   SIGNAL eff_is_rom  : STD_LOGIC;
   SIGNAL eff_data    : STD_LOGIC_VECTOR(31 DOWNTO 0);
@@ -154,15 +197,20 @@ ARCHITECTURE str OF cs1800_prcx18_memory IS
   SIGNAL eff_en      : STD_LOGIC;
   SIGNAL eff_rom_idx : NATURAL RANGE 0 TO c_rom_words - 1;
   SIGNAL eff_ram_idx : NATURAL RANGE 0 TO g_ram_words - 1;
+  SIGNAL eff_idx     : NATURAL RANGE 0 TO c_mem_words - 1;
 
   SIGNAL a_is_rom : STD_LOGIC;
 
 BEGIN
 
-  eff_addr   <= b_addr WHEN sel_ext = '1' ELSE a_address;
-  eff_is_rom <= '1' WHEN eff_addr(15 DOWNTO 13) = "000" ELSE '0';
+  eff_addr    <= b_addr WHEN sel_ext = '1' ELSE a_address;
+  eff_is_rom  <= '1' WHEN eff_addr(15 DOWNTO 13) = "000" ELSE '0';
   eff_rom_idx <= to_integer(unsigned(eff_addr(12 DOWNTO 2)));
-  eff_ram_idx <= (to_integer(unsigned(eff_addr(15 DOWNTO 2))) - c_rom_words) MOD g_ram_words;
+  eff_ram_idx <= to_integer(unsigned(eff_addr(c_ram_addr_bits + 1 DOWNTO 2)));
+  -- Single index mux -- a small constant-offset add over an 8-bit
+  -- range (g_ram_words), nothing like bug #1's runtime divider, and
+  -- feeding only ONE array read downstream, never two.
+  eff_idx     <= eff_rom_idx WHEN eff_is_rom = '1' ELSE c_rom_words + eff_ram_idx;
 
   eff_data <= b_din WHEN sel_ext = '1' ELSE a_data_in & a_data_in & a_data_in & a_data_in;
 
@@ -182,42 +230,40 @@ BEGIN
 
   -- The one canonical byte-enabled write, synchronous -- same timing as
   -- ram.vhd/shared_ram.vhd's Port A write. Four static-slice lane
-  -- writes, not a loop over a variable-bound slice.
+  -- writes into the one mem array, not a loop over a variable-bound
+  -- slice, and not two separately-selected arrays.
   PROCESS (clk) IS
   BEGIN
     IF rising_edge(clk) THEN
       IF eff_en = '1' THEN
-        IF eff_is_rom = '1' THEN
-          IF eff_we(0) = '1' THEN rom(eff_rom_idx)(7 DOWNTO 0)   <= eff_data(7 DOWNTO 0);   END IF;
-          IF eff_we(1) = '1' THEN rom(eff_rom_idx)(15 DOWNTO 8)  <= eff_data(15 DOWNTO 8);  END IF;
-          IF eff_we(2) = '1' THEN rom(eff_rom_idx)(23 DOWNTO 16) <= eff_data(23 DOWNTO 16); END IF;
-          IF eff_we(3) = '1' THEN rom(eff_rom_idx)(31 DOWNTO 24) <= eff_data(31 DOWNTO 24); END IF;
-        ELSE
-          IF eff_we(0) = '1' THEN ram(eff_ram_idx)(7 DOWNTO 0)   <= eff_data(7 DOWNTO 0);   END IF;
-          IF eff_we(1) = '1' THEN ram(eff_ram_idx)(15 DOWNTO 8)  <= eff_data(15 DOWNTO 8);  END IF;
-          IF eff_we(2) = '1' THEN ram(eff_ram_idx)(23 DOWNTO 16) <= eff_data(23 DOWNTO 16); END IF;
-          IF eff_we(3) = '1' THEN ram(eff_ram_idx)(31 DOWNTO 24) <= eff_data(31 DOWNTO 24); END IF;
-        END IF;
+        IF eff_we(0) = '1' THEN mem(eff_idx)(7 DOWNTO 0)   <= eff_data(7 DOWNTO 0);   END IF;
+        IF eff_we(1) = '1' THEN mem(eff_idx)(15 DOWNTO 8)  <= eff_data(15 DOWNTO 8);  END IF;
+        IF eff_we(2) = '1' THEN mem(eff_idx)(23 DOWNTO 16) <= eff_data(23 DOWNTO 16); END IF;
+        IF eff_we(3) = '1' THEN mem(eff_idx)(31 DOWNTO 24) <= eff_data(31 DOWNTO 24); END IF;
       END IF;
     END IF;
   END PROCESS;
 
   -- Port A read: zero-latency combinational, one static-slice lane
-  -- selected via a case on the address's low 2 bits.
-  PROCESS (a_address, a_nCS, a_nOE, a_is_rom, rom, ram) IS
+  -- selected via a case on the address's low 2 bits, off ONE array
+  -- read using a single muxed index (see "bug #2" above -- this used
+  -- to be two independent array reads combined by a data-level mux).
+  PROCESS (a_address, a_nCS, a_nOE, a_is_rom, mem) IS
     VARIABLE rom_idx : NATURAL RANGE 0 TO c_rom_words - 1;
     VARIABLE ram_idx : NATURAL RANGE 0 TO g_ram_words - 1;
+    VARIABLE idx     : NATURAL RANGE 0 TO c_mem_words - 1;
     VARIABLE word    : STD_LOGIC_VECTOR(31 DOWNTO 0);
   BEGIN
     a_data_out <= (OTHERS => '0'); -- chip is not selected / not reading
     IF (a_nCS = '0' AND a_nOE = '0') THEN
       rom_idx := to_integer(unsigned(a_address(12 DOWNTO 2)));
-      ram_idx := (to_integer(unsigned(a_address(15 DOWNTO 2))) - c_rom_words) MOD g_ram_words;
+      ram_idx := to_integer(unsigned(a_address(c_ram_addr_bits + 1 DOWNTO 2)));
       IF a_is_rom = '1' THEN
-        word := rom(rom_idx);
+        idx := rom_idx;
       ELSE
-        word := ram(ram_idx);
+        idx := c_rom_words + ram_idx;
       END IF;
+      word := mem(idx);
       CASE a_address(1 DOWNTO 0) IS
         WHEN "00"   => a_data_out <= word(7 DOWNTO 0);
         WHEN "01"   => a_data_out <= word(15 DOWNTO 8);
@@ -227,10 +273,10 @@ BEGIN
     END IF;
   END PROCESS;
 
-  -- Port B read: the whole word, one array read, no concatenation of
-  -- separate elements.
-  b_dout <= rom(to_integer(unsigned(b_addr(12 DOWNTO 2))))
-              WHEN b_addr(15 DOWNTO 13) = "000" ELSE
-            ram((to_integer(unsigned(b_addr(15 DOWNTO 2))) - c_rom_words) MOD g_ram_words);
+  -- Port B read: the whole word, one array read off the same single
+  -- muxed index, no concatenation of separate elements.
+  b_dout <= mem(c_rom_words + to_integer(unsigned(b_addr(c_ram_addr_bits + 1 DOWNTO 2))))
+              WHEN b_addr(15 DOWNTO 13) /= "000" ELSE
+            mem(to_integer(unsigned(b_addr(12 DOWNTO 2))));
 
 END str;

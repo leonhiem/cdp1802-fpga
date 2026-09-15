@@ -256,3 +256,60 @@ aliasing hang on real hardware -- now that cdp1854+FIFO+UART is
 independently proven reliable, any further odd hardware behavior can
 be trusted to be a CPU/memory-path issue, not a confound from this
 FIFO bug.
+
+## 2026-09-14: milestone 3c -- two more real hardware-only bugs found and fixed in the RAM address decode
+
+Following straight on from 3b's plan: went after the `0xC253`/`0xC2C2`
+two-address spin next. Found two separate real hardware-only bugs in
+`cs1800_prcx18_memory.vhd`, neither visible in GHDL simulation (which
+never disagrees with itself the way real synthesis can):
+
+**Bug #1**: `g_ram_words` was 384 (1.5KB) -- not a power of two, picked
+purely to hit the LUTRAM budget as closely as possible. That forced the
+RAM index's address decode into a genuine subtract-then-`MOD 384` on
+every single read, unconditionally, even ROM ones -- a real
+combinational divider, not the cheap bit-slice every other design here
+(`ram.vhd`, `shared_ram.vhd`) uses. Fixed by requiring a power of two
+(dropped to 256 words = 1KB) so the RAM index is a pure bit-slice
+again. Real, verified improvement (the CPU ran measurably further
+before the next hang) but not sufficient alone -- see bug #2.
+
+**Bug #2**: even with bug #1 fixed, ROM and RAM were still two
+*separate* arrays, each read unconditionally on every access and
+combined via a data-level 2:1 mux (`a_is_rom ? rom(rom_idx) :
+ram(ram_idx)`) -- a shape no other proven design in this repo uses.
+The hazard: even while `a_is_rom` itself stays constant (e.g. execution
+sitting entirely inside ROM), the mux's other, "losing" input
+(`ram(ram_idx)`) is still a live signal changing on every address
+transition -- an unregistered 2:1 mux with a constantly-changing
+losing input is a textbook static-hazard shape, independent of how
+simple that input's own decode is. On real hardware this looked
+exactly like the CPU hanging in the tight `0xC253`/`0xC2C2` two-address
+spin, stuck in the execute state (SC never returning to fetch);
+confirmed via ILA, and GHDL again saw nothing (zero-delay simulation
+can't model this at all). Fixed by merging ROM and RAM into one `mem`
+array and muxing the *index* once before a single read, never the data
+after two independent reads -- the same safe idiom the write side (and
+`shared_ram.vhd` generally) already used.
+
+Re-verified with a local-only exploratory testbench
+(`doc/cs1800_hardware_source/tb_prcx18_lutram.vhd`, gitignored --
+loads the real PRCX-18 ROM via Port B exactly like `devmem` does, then
+runs it through the real `cs1800_prcx18_top`/`cs1800_prcx18_memory`
+hardware design at the new 256-word/1KB size): 12M clock cycles,
+GHDL exits clean, and the UART TX trace is byte-for-byte the same
+"fits but functionally short" result the earlier size-sweep table
+predicted for 1KB -- full boot banner, then `-SYS-Starting Console
+Task-` repeating -- with `ram_addr` cycling through a wide, changing
+range the whole run, never settling into a fixed two-address spin.
+Simulation obviously can't confirm the two hardware bugs themselves
+(neither ever showed up here), but it does confirm the fix is
+behavior-preserving and introduces no functional regression before
+trusting it on real hardware.
+
+**Next**: rebuild `build_project_prcx18.tcl` (now at 256 words/1KB,
+still deliberately short of the ~2KB PRCX-18 needs to fully start its
+Console Task -- see this file's size/tradeoff table and
+`cs1800_prcx18_memory.vhd`'s header) and reprogram real hardware to
+confirm the `0xC253`/`0xC2C2` spin is actually gone there too, not just
+absent from a simulation that never modeled it in the first place.
