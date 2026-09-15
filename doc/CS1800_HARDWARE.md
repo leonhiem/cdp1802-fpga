@@ -107,8 +107,28 @@ sections above:
   presents the raw bus (`N0-N2`, `TPA`, `TPB`, `MRD`, `MWR`, `Q`,
   `EF1-4`, `INT`, address/data) onto the backplane; all decoding lives
   on the peripheral boards. There's also SC-decoded FETCH/EXECUTE/
-  DMA/INT-ACK front-panel LEDs and watchdog/reset/single-step debug
-  logic -- cosmetic/debug, not needed for the emulation goal.
+  DMA/INT-ACK front-panel LEDs, and five front-panel switches this
+  writeup previously (2026-09-12) dismissed as "cosmetic/debug, not
+  needed" -- corrected 2026-09-15, per the user, they're not purely
+  cosmetic: **`CLOCK OFF`** disables the incoming mains-derived `LC`
+  (50Hz) signal itself (the two `4013` flip-flops right on the `LC`
+  bus input) -- PRCX-18's scheduler needs `LC` running, so this must
+  stay off (`LC` enabled) for the OS to function. **`DOG OFF`**
+  disables a discrete RC/transistor-pair watchdog monostable (150K/
+  3.9V zener/2x BC558) that otherwise feeds the same `4013`/`4093` gate
+  cluster driving the 1802's `CLEAR` pin -- i.e. an unfed watchdog
+  periodically forces a hardware reset; this switch should be *on*
+  (watchdog disabled) for normal operation. **`HALT`** and **`RESET`**
+  are separate manual front-panel lines into that same gate cluster
+  (`HALT` most likely gates the 1802's `WAIT` pin; `RESET` is a manual
+  push-button also feeding `CLEAR`) -- `HALT` must not be engaged.
+  **`S.C.`** is single-cycle/step, not otherwise investigated. None of
+  this is modeled in the FPGA port yet (the Cora bring-up has no
+  watchdog at all, and `ctrl_in`'s own `halt`/`reset`/`run` bits are
+  software-driven, not physical-switch-driven) -- it only matters once
+  the Cora is actually swapped into the real backplane in place of this
+  physical CPU board (the eventual goal, not yet attempted), not for
+  the standalone Cora-only bring-up this file otherwise documents.
 - **Memory board**: matches "Memory map" above exactly, and shows the
   actual decode: a CD4556 (fed by two `TPA`-latched 4042s holding the
   upper address bits) generates the 4 chip-selects within each 32K
