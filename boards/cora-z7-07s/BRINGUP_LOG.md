@@ -583,3 +583,85 @@ foundational, shared by every design in this repo including the
 already-`shared_ram`-proven `cs1800_top`, so any fix here needs real
 care and its own from-scratch re-verification (GHDL regression first,
 then hardware) before trusting it anywhere.
+
+## 2026-09-15: milestone 3h -- found and fixed the real cause: an OR-merged bus, not the D_in mux
+
+The `D_in_amux`/`D_in_dmux` mux candidate above turned out to be a dead
+end on closer inspection: `A_sel_lohi` (its select) is a registered
+signal (`r.A_sel_lohi` in `instr.vhd`'s synchronous process), not a
+combinational one, so it doesn't have the "changing losing input"
+shape that made today's earlier two bugs real. Ran `report_timing
+-delay_type min` (hold analysis) on the actual register that captures
+a branch's memory-read target byte (`u_instr/r_reg[tmp_page][*]`,
+found by grepping `instr.vhd` for `tmp_page` -- exactly the "M(R(P))
+-> R(P).0" temporary the disassembly comments describe) against the
+routed checkpoint: comfortable hold margins throughout (0.6-0.9ns) --
+not a timing-margin problem at all.
+
+The real mechanism, found by reading `cs1800.vhd` itself: the CPU's
+memory-mapped data bus is built as `data <= cpu_data_out OR
+ram_data_out_ext OR io_input_data OR io_data_in_ext;` -- an explicit
+comment there says this replaces the real chip's tri-state bus
+resolution, and relies on each of the four sources correctly forcing
+itself to `X"00"` whenever it isn't the one actually driving (each
+one's own module does this -- checked `dmux.vhd`, `io_inp.vhd`,
+`shared_ram.vhd`/`cs1800_prcx18_memory.vhd` directly, all correct as
+written). `cpu_data_out`'s `X"00"` XOR'd against the correct `0xB1`
+gives exactly `0xF1` if `cpu_data_out` happens to be non-zero in bit 6
+at the exact instant `ram_data_out_ext` is sampled -- an OR-merge only
+needs ONE contributor to be non-zero when it shouldn't be, at the
+exact right instant, to corrupt a read exactly like this, and (unlike
+an explicit priority mux, which structurally excludes every non-
+selected source) there's nothing here forcing that guarantee to hold
+at the physical-timing level on real silicon, only at the
+already-known-limited zero-delay-simulation level.
+
+**Fix**: `cpu_data_out` and `io_input_data` both already have an
+explicit, always-available "am I actually driving" signal in scope at
+this point (`cpu_data_oe`, `n_io_in_sel`) -- rewrote the OR into an
+explicit priority mux that structurally excludes each one entirely
+except when its own signal says it's driving, instead of trusting each
+one's own self-zeroing:
+
+```
+data <= cpu_data_out WHEN cpu_data_oe = '1' ELSE
+        io_input_data WHEN n_io_in_sel = '0' ELSE
+        ram_data_out_ext OR io_data_in_ext;
+```
+
+`ram_data_out_ext`/`io_data_in_ext` stay OR'd together deliberately --
+they're mutually exclusive by construction (nMRD-gated vs nMWR-gated
+reads can't both be active in the same real machine cycle) and neither
+has its own "active" signal exposed at this level to gate on instead;
+no evidence implicates either of them specifically.
+
+**Verification, same discipline as every fix today**: full `sim/ghdl/
+run.sh` (all four testbenches: `tb_cdp18_dump`, `tb_cs1800_dump`,
+`tb_cs1800_memory`, `tb_cs1800_console`) and `boards/cora-z7-07s/sim/
+run.sh` all pass, and -- checked explicitly, not assumed --
+`sim/ghdl/reference/*.txt` come back byte-identical to their committed
+golden copies (`git status` shows no diff after regenerating them).
+Zero simulated behavior change, exactly as expected for a hazard
+zero-delay simulation could never see in the first place.
+
+**Real hardware, rebuilt `cs1800_top`+`shared_ram`, same from-start
+capture method**: `compare_ila_to_golden.py` now finds hardware
+matching the golden reference for its first **126** fetches (up from
+118) -- the `0x0098` `BR` now correctly reads `0xB1` and lands there,
+and every instruction from `0x00B1` through the `LBR` at `0x00C1`
+(`0xB1`,`0xB5`,`0xB6`,`0xB3`,`0xB8`,`0xBA`,`0xBE`,`0xC1` -- 8 fetches)
+now matches exactly. **The specific bug is confirmed fixed.**
+
+It still diverges one step later: golden's `LBR` at `0x00C1` correctly
+jumps to `0x0100`; hardware instead lands at `0x0000`, refetching `DIS`
+-- i.e. it looks like a restart from address 0, not a wrong-but-live
+memory value the way the `0x0099` bug did. Whether this is the exact
+same OR-merge hazard striking `LBR`'s (2-byte) target read elsewhere,
+or something new, is not yet known.
+
+**Next**: keep bisecting the same way toward this new divergence at
+`0x00C1`'s `LBR` (2-byte target read, landing at address 0 instead of
+`0x0100`) -- check whether it's the still-untouched `ram_data_out_ext
+OR io_data_in_ext` pairing, or a genuinely different mechanism (the
+exact-zero landing address looks more like a real reset than a
+corrupted-but-live read).

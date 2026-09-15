@@ -154,7 +154,29 @@ BEGIN
     nCS => n_io_in_sel
   );
 
-  data <= cpu_data_out OR ram_data_out_ext OR io_input_data OR io_data_in_ext;
+  -- Real hardware-only bug found 2026-09-15 (see boards/cora-z7-07s/
+  -- BRINGUP_LOG.md's "milestone 3g"/"3h"): this used to be a flat
+  -- `cpu_data_out OR ram_data_out_ext OR io_input_data OR
+  -- io_data_in_ext` -- correct in principle (each source's own module
+  -- already zeros itself when not selected, so the OR should reduce to
+  -- whichever one is actually driving), but on real hardware a stray
+  -- bit from `cpu_data_out` (the CPU's own bus-drive path, correctly
+  -- zero *most* of the time but not proven zero at the exact instant a
+  -- real memory read is being sampled) corrupted a real-time memory
+  -- read: a single bit leaked through the OR into an otherwise-correct
+  -- byte. `cpu_data_out`/`io_input_data` both already have an explicit,
+  -- always-available "am I actually driving" signal at this level
+  -- (`cpu_data_oe`, `n_io_in_sel`) -- gating them out structurally
+  -- (excluded entirely, not just relying on their own self-zeroing)
+  -- removes that specific hazard instead of merely trusting it away.
+  -- `ram_data_out_ext`/`io_data_in_ext` are left OR'd together: they're
+  -- mutually exclusive by construction (nMRD-gated vs nMWR-gated reads
+  -- can never both be active in the same machine cycle on a real 1802),
+  -- and neither has its own "active" signal exposed at this level to
+  -- gate on instead.
+  data <= cpu_data_out WHEN cpu_data_oe = '1' ELSE
+          io_input_data WHEN n_io_in_sel = '0' ELSE
+          ram_data_out_ext OR io_data_in_ext;
 
   dbg_ram_addr <= ram_addr;
   dbg_data     <= data;
