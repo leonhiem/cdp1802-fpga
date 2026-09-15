@@ -63,7 +63,15 @@ ENTITY cs1800_cpu IS
     -- every existing instantiation (cs1800.vhd, and everything built
     -- on it) is completely unaffected unless a board wires this to a
     -- real "memory not ready yet" signal.
-    mem_wait : IN STD_LOGIC := '0'
+    mem_wait : IN STD_LOGIC := '0';
+
+    -- Exploratory debug taps, 2026-09-15 (see cdp1802.vhd's own note
+    -- and boards/cora-z7-07s/BRINGUP_LOG.md's "milestone 3i") --
+    -- promoted straight through from cdp1802.vhd, no behavior change.
+    dbg_tmp_page : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
+    dbg_R_in     : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
+    dbg_forceS1  : OUT STD_LOGIC;
+    dbg_extraS1  : OUT STD_LOGIC
   );
 END cs1800_cpu;
 
@@ -209,7 +217,11 @@ BEGIN
     nMWR     => nMWR,
     nINT     => nINT_i,
     nDMA_OUT => nDMA_OUT,
-    nDMA_IN  => nDMA_IN
+    nDMA_IN  => nDMA_IN,
+    dbg_tmp_page => dbg_tmp_page,
+    dbg_R_in     => dbg_R_in,
+    dbg_forceS1  => dbg_forceS1,
+    dbg_extraS1  => dbg_extraS1
   );
 
 

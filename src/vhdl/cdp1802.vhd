@@ -42,7 +42,17 @@ ENTITY cdp1802 IS
     nMWR     : OUT   STD_LOGIC;
     nINT     : IN    STD_LOGIC;
     nDMA_OUT : IN    STD_LOGIC;
-    nDMA_IN  : IN    STD_LOGIC
+    nDMA_IN  : IN    STD_LOGIC;
+
+    -- Exploratory debug taps, 2026-09-15 (see boards/cora-z7-07s/
+    -- BRINGUP_LOG.md's "milestone 3i"): none of these have a real chip
+    -- pin -- tmp_page/R_in/forceS1/extraS1 are purely FPGA-internal to
+    -- this multi-cycle state machine, unlike every other port above.
+    -- Added to chase a real-hardware-only LBR bug via an ILA capture.
+    dbg_tmp_page : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
+    dbg_R_in     : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
+    dbg_forceS1  : OUT STD_LOGIC;
+    dbg_extraS1  : OUT STD_LOGIC
   );
 END cdp1802;
 
@@ -215,8 +225,13 @@ BEGIN
     wr_T      => wr_T1,
     N_addr_out => N,
     dma_in    => DMA_IN,
-    dma_out   => DMA_OUT
+    dma_out   => DMA_OUT,
+    dbg_tmp_page => dbg_tmp_page
   );
+
+  dbg_R_in    <= R_in;
+  dbg_forceS1 <= forceS1;
+  dbg_extraS1 <= extraS1;
 
   u_Q : ENTITY work.ff
   PORT MAP (

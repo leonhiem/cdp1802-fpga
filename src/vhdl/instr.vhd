@@ -68,7 +68,15 @@ ENTITY instr IS
     wr_T       : OUT STD_LOGIC;
     N_addr_out : OUT STD_LOGIC_VECTOR(2 DOWNTO 0);
     dma_in     : IN  STD_LOGIC;
-    dma_out    : IN  STD_LOGIC
+    dma_out    : IN  STD_LOGIC;
+
+    -- Exploratory debug tap, 2026-09-15 (see boards/cora-z7-07s/
+    -- BRINGUP_LOG.md's "milestone 3i"): tmp_page has no real chip pin
+    -- (it's a purely FPGA-internal temporary within this multi-cycle
+    -- state machine), so it was never exposed before. Added to chase a
+    -- real-hardware-only LBR bug via an ILA capture, same as this
+    -- project's other dbg_* ports.
+    dbg_tmp_page : OUT STD_LOGIC_VECTOR(7 DOWNTO 0)
   );
 END instr;
 
@@ -1193,6 +1201,7 @@ BEGIN
   float_DATA <= r.float_DATA;
   float_T <= r.float_T;
   A_sel_lohi <= r.A_sel_lohi;
+  dbg_tmp_page <= r.tmp_page;
   alu_oper   <= r.alu_oper;
   wr_D   <= r.wr_D;
   rd_D   <= r.rd_D;

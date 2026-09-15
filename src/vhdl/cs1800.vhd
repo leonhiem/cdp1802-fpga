@@ -67,7 +67,15 @@ ENTITY cs1800 IS
     -- mem_wait (see its header for what it does); defaults to '0'
     -- (never wait), so this doesn't affect any existing instantiation.
     dbg_tpa  : OUT STD_LOGIC;
-    mem_wait : IN STD_LOGIC := '0'
+    mem_wait : IN STD_LOGIC := '0';
+
+    -- Exploratory debug taps, 2026-09-15 (see cs1800_cpu.vhd/
+    -- cdp1802.vhd's own notes and boards/cora-z7-07s/BRINGUP_LOG.md's
+    -- "milestone 3i") -- promoted straight through, no behavior change.
+    dbg_tmp_page : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
+    dbg_R_in     : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
+    dbg_forceS1  : OUT STD_LOGIC;
+    dbg_extraS1  : OUT STD_LOGIC
   );
 END cs1800;
 
@@ -86,7 +94,7 @@ ARCHITECTURE str OF cs1800 IS
   -- tri-state-resolved net. No internal 'Z'.
   SIGNAL data  : STD_LOGIC_VECTOR(7 DOWNTO 0);
   SIGNAL cpu_data_out : STD_LOGIC_VECTOR(7 DOWNTO 0);
-  SIGNAL cpu_data_oe  : STD_LOGIC; -- unused here; useful for a future AXI/BRAM bridge
+  SIGNAL cpu_data_oe  : STD_LOGIC; -- now also gates the data OR-merge below
   SIGNAL io_input_data : STD_LOGIC_VECTOR(7 DOWNTO 0);
   SIGNAL sc_i  : STD_LOGIC_VECTOR(1 DOWNTO 0);
   SIGNAL addr  : STD_LOGIC_VECTOR(7 DOWNTO 0);
@@ -122,7 +130,11 @@ BEGIN
     halt => halt,
     single => single,
     run => run,
-    mem_wait => mem_wait
+    mem_wait => mem_wait,
+    dbg_tmp_page => dbg_tmp_page,
+    dbg_R_in     => dbg_R_in,
+    dbg_forceS1  => dbg_forceS1,
+    dbg_extraS1  => dbg_extraS1
   );
 
   p_reg_high_addr : PROCESS(tpa, addr)
