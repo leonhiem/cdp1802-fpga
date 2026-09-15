@@ -557,3 +557,29 @@ happens to land on whatever byte is being fetched at a particular
 point in the boot sequence -- rerunning against a different program
 (or the same one with padding/NOPs inserted before this point) would
 tell them apart.
+
+**Strong candidate found, not yet verified**: `cdp1802.vhd` (~line
+413):
+
+```
+D_in <= D_in_amux WHEN (A_sel_lohi = "01" OR A_sel_lohi = "10") ELSE D_in_dmux;
+```
+
+Exactly the same shape as today's bug #2 (`cs1800_prcx18_memory.vhd`):
+an unregistered mux combining two continuously-live combinational
+sources (`D_in_amux` -- the A-register byte, and `D_in_dmux` -- the
+external memory-bus byte, i.e. the value read at `0x0099`) based on a
+control signal (`A_sel_lohi`) that isn't guaranteed to be stable
+relative to them. The header comment above it explains this used to be
+a real tri-state bus on the real chip (`float0`/`float1` decided who
+drove it, the other side floated) -- converted here into an explicit
+mux, which is exactly the kind of "made explicit but now has a real
+static-hazard shape it didn't have as two separately-floating drivers"
+conversion this project has already found real hardware bugs in twice
+today. Not yet confirmed as the actual cause (haven't traced whether
+`A_sel_lohi`'s timing during a `BR`'s operand read specifically can
+overlap a `D_in_dmux` transition), and not yet touched -- this is
+foundational, shared by every design in this repo including the
+already-`shared_ram`-proven `cs1800_top`, so any fix here needs real
+care and its own from-scratch re-verification (GHDL regression first,
+then hardware) before trusting it anywhere.
