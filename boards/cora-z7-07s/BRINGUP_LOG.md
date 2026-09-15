@@ -788,3 +788,89 @@ specific new `0x00B3`/`0x0033` instance the same way as before, or step
 back and consider the synchronous-memory-path option, or stop here for
 now. Three real, confirmed, hardware-verified bug fixes landed today
 regardless of which way this goes next.
+
+## 2026-09-15: milestone 3k -- a real synchronous-memory attempt, and why it's genuinely hard (not committed -- see below)
+
+Per the user's direction: stepped back from bisecting individual
+routing-dependent manifestations and investigated whether the memory
+read path could be made properly synchronous throughout, closing this
+whole class of hazard rather than patching one instance at a time.
+
+**First, understood why the *previous* attempt (milestone 3, this
+file, and `cs1800_prcx18_memory.vhd`'s header) was abandoned**: it used
+the CDP1802's own real `nWAIT`/PAUSE mechanism (`cs1800_cpu.vhd`'s
+`mem_wait` -- a genuine per-access dynamic wait-state) and found "an
+address register went undefined on the third machine cycle." Before
+retrying anything like that, read `instr.vhd` directly to check whether
+a dynamic wait is even necessary: for every instruction checked
+(`S0_FETCH`, `BR`), the address is presented at `clk_cnt=0` (`wr_A`)
+and the read data isn't consumed until `clk_cnt=3` or `4` -- 3-4 real
+`CLOCK` cycles of built-in slack already exist in the CPU's own 8-clock
+machine cycle. That's comfortably more than a single Block-RAM read's
+1-cycle latency needs, suggesting a **fixed**, always-1-cycle
+synchronous read might work with *no* dynamic wait-state at all -- no
+`mem_wait`, no PAUSE, no changes to `cs1800_cpu.vhd`/`control.vhd`/
+`instr.vhd` whatsoever, sidestepping the previous attempt's whole
+failure mode by construction.
+
+**Tested this directly and cheaply, in simulation only, before risking
+anything real**: built two throwaway files -- `ram_sync.vhd` (a copy of
+`ram.vhd` with the read process changed from combinational to a plain
+`IF rising_edge(clk) THEN data_out <= ...`) and `cdp18_sync.vhd` (a
+copy of `cdp18.vhd` instantiating `ram_sync` instead of `ram`, nothing
+else changed) -- plus a matching `tb_cdp18_sync_dump.vhd` writing to
+its own output file, diffed directly against the exact same
+`sim/ghdl/reference/tb_cdp18_tpb.txt` `ram.vhd`/`cdp18.vhd` already
+pass.
+
+**Result: it does not work, and GHDL itself proves why, precisely.**
+The dumped trace showed `ram_addr` as `XXXX` (VHDL's genuine
+"undefined" value, not a display glitch) for 469 of 622 lines.
+Confirmed this wasn't a pre-existing/harmless artifact by running the
+*original*, proven `cdp18`/`ram` design through the identical
+`NUMERIC_STD.TO_INTEGER: metavalue detected` warning count: **7**
+warnings for the working design (baseline, apparently a harmless
+startup artifact at time 0 -- same count either way), versus **3523**
+for `cdp18_sync`/`ram_sync`. That's real, ongoing internal corruption,
+not cosmetic -- GHDL is tracking actual undefined bits propagating
+through the CPU's own registers over the whole run, confirmed by an
+objective, reproducible count rather than eyeballing a trace.
+
+**Why, best guess**: the CDP1802's real `ADDR` pin is only 8 bits,
+time-multiplexed between the address's high and low byte within a
+single machine cycle (`control.vhd`'s `addr_lohi`, latched into
+`addr_high` on `TPA` -- see `cdp18.vhd`/`cs1800.vhd`'s own
+`p_reg_high_addr` process). The *reconstructed* 16-bit `ram_addr` this
+project's memories all key off is therefore only guaranteed valid
+during the specific portion of the machine cycle memory access
+actually happens in -- not necessarily held rock-stable for the entire
+cycle the way a naive "just delay the read by 1 clock" idea assumes.
+A blanket `rising_edge(clk)`-gated read captures *whatever* `ram_addr`
+happens to show on every single clock edge, including moments outside
+that valid window, when the low byte may be mid-transition for reasons
+having nothing to do with the current memory access. The 3-4 cycle
+slack found in `instr.vhd` is real, but it's slack in *when data must
+be consumed*, not proof that the *address* stays valid for that whole
+window -- a real synchronous read would need to latch only within the
+specific, narrower window `nCS`/`nOE`/`nWE` actually mark as a real
+access, not unconditionally every cycle.
+
+**Not committed**: per this project's own established convention (see
+`cs1800_prcx18_memory.vhd`'s header, which documents the *previous*
+abandoned attempt in prose only, keeping no broken files around),
+`ram_sync.vhd`/`cdp18_sync.vhd`/`tb_cdp18_sync_dump.vhd` were deleted
+after this experiment rather than committed -- they don't work, and
+the finding is fully captured here in prose. Regenerate them from this
+description if picking this up again.
+
+**Next**: a real synchronous-memory attempt would need the registered
+read to update only within the actual access window (e.g. gated on
+`nOE`/`nCS` freshly asserting, or captured once per machine cycle at a
+specific `clk_cnt` known to fall inside the valid-address window,
+rather than unconditionally on every `CLOCK` edge) -- worth trying, but
+a more careful design than the one-line change tested here. Given how
+deep both the wait-state and the naive-registered-read approaches turn
+out to be, whack-a-moling individual routing-dependent manifestations
+of the `OR`-merge-style hazard (milestone 3g/3h/3j) may honestly be the
+more tractable path in the near term, even though it doesn't close the
+whole class at once.
