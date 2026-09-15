@@ -27,6 +27,16 @@ ENTITY cs1800 IS
     Q       : OUT    STD_LOGIC;
     nEF      : IN    STD_LOGIC_VECTOR(2 DOWNTO 0);
 
+    -- Real backplane INT line (active low), 2026-09-15: previously a
+    -- hardcoded-inactive internal signal -- see BRINGUP_LOG.md's
+    -- interrupt-wiring entry. Defaults to '1' (inactive) so every
+    -- existing instantiation (cs1800_top.vhd, every testbench) keeps
+    -- its exact prior behavior unless it's deliberately wired up, same
+    -- convention as io_data_in_ext's default below. Only the LC/timer
+    -- interrupt (cs1800_cpu.vhd's own nINT_tmp) already worked before
+    -- this; this port adds a second, external source, ORed with it.
+    nINT     : IN    STD_LOGIC := '1';
+
     reset : IN STD_LOGIC;
     halt  : IN STD_LOGIC;
     single : IN STD_LOGIC;
@@ -101,7 +111,6 @@ ARCHITECTURE str OF cs1800 IS
   SIGNAL  tpb  : STD_LOGIC;
   SIGNAL  nmrd  : STD_LOGIC;
   SIGNAL  nmwr  : STD_LOGIC;
-  SIGNAL  nINT  : STD_LOGIC := '1';
 
   SIGNAL n  : STD_LOGIC_VECTOR(2 DOWNTO 0);
   -- FPGA note: see cdp18.vhd -- 'data' is now an explicit OR-merge of

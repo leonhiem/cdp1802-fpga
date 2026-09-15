@@ -84,7 +84,26 @@ ENTITY cdp1854 IS
     -- Transmitter Holding register (rsel='0'); tx_data_valid pulses for
     -- one clk cycle. See "Deliberate simplifications" above.
     tx_data       : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
-    tx_data_valid : OUT STD_LOGIC
+    tx_data_valid : OUT STD_LOGIC;
+
+    -- Interrupt output (real chip's INT pin, open-drain active-low on
+    -- the real hardware -- modeled here as an ordinary active-low
+    -- output, matching nCS/nWE/nOE's convention). Per the datasheet
+    -- (doc/CDP1854_UART.md, Table 4/"Interrupts" section): asserted
+    -- when IE (Control Register bit 5) is set AND DA or THRE is true.
+    -- THRE.TSRE is folded into the THRE term (TSRE is tied permanently
+    -- '1' -- see "Deliberate simplifications" above, so THRE alone
+    -- already covers it); PSI/CTS edges aren't modeled (no modem-status
+    -- inputs exist on this model), so they never contribute.
+    -- Known model limitation: because THRE is tied permanently '1'
+    -- (this model has no real "busy" state -- see file header), an
+    -- IE=1, TX-side-enabled UART will assert nINT continuously, not
+    -- just "once THRE next goes true" the way a real chip with genuine
+    -- shift-register timing would. Harmless for the receive-driven use
+    -- case (DA-triggered, e.g. keyboard input) this was built for; a
+    -- future refinement could latch THRE and clear it exactly once per
+    -- character written, matching the datasheet's clear-on-write rule.
+    nINT : OUT STD_LOGIC
   );
 END cdp1854;
 
@@ -128,6 +147,11 @@ BEGIN
   END PROCESS;
 
   tx_data_valid <= tx_data_valid_i;
+
+  -- IE = control_reg(5) -- see Table 4 in doc/CDP1854_UART.md.
+  nINT <= '0' WHEN (control_reg(5) = '1' AND
+                     (status_reg(0) = '1' OR status_reg(7) = '1'))
+          ELSE '1';
 
   p_read : PROCESS (nCS, nOE, rsel, rx_data, status_reg) IS
   BEGIN

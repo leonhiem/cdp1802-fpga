@@ -141,6 +141,19 @@ ARCHITECTURE str OF cs1800_prcx18_top IS
   SIGNAL uart_a_tx_data_i  : STD_LOGIC_VECTOR(7 DOWNTO 0);
   SIGNAL uart_a_tx_valid_i : STD_LOGIC;
 
+  -- Interrupt wiring, 2026-09-15 -- see BRINGUP_LOG.md's entry and the
+  -- real SIO board schematic (3 NAND gates + 2 diodes, per the user's
+  -- own description): gate 1 ORs both CDP1854 ports' INT onto the
+  -- shared backplane nINT (port B not needed here -- see
+  -- cs1800_console.vhd's identical note); gate 2 inverts that onto the
+  -- shared bus; gate 3 pulls EF2 low only while Q is also high, letting
+  -- firmware identify "am I the interrupt source" by setting Q=1 and
+  -- polling EF2. nEF_i replaces the previous static ctrl_in-derived
+  -- EF1/EF2/EF3 for EF2 specifically -- EF1/EF3 stay ctrl_in-controlled
+  -- (still useful for manual testing via devmem).
+  SIGNAL uart_a_nint_i : STD_LOGIC;
+  SIGNAL nEF_i         : STD_LOGIC_VECTOR(2 DOWNTO 0);
+
   -- Software-drainable TX FIFO: work.byte_fifo (256 bytes, registered
   -- head/avail -- see its own header for why: an earlier hand-rolled
   -- copy of this same FIFO, right here, had a combinational head
@@ -173,12 +186,20 @@ BEGIN
   uart_a_nsel <= '0' WHEN (sel4_n = '0' AND io_sel_reg(2) = '0') ELSE '1';
   io_din_i <= uart_a_dout;
 
+  -- ctrl_in(6 DOWNTO 4) is EF3/EF2/EF1 (bit 6=EF3, 5=EF2, 4=EF1) -- see
+  -- cs1800.vhd's nEF(2 DOWNTO 0)=EF3/EF2/EF1 convention. EF2 (index 1)
+  -- is now live -- see uart_a_nint_i/nEF_i comment above.
+  nEF_i(0) <= ctrl_in(4); -- EF1, still manual
+  nEF_i(2) <= ctrl_in(6); -- EF3, still manual
+  nEF_i(1) <= '0' WHEN (uart_a_nint_i = '0' AND Q = '1') ELSE '1'; -- EF2, live
+
   u_cs1800 : ENTITY work.cs1800
   PORT MAP (
     CLOCK  => CLOCK,
     LC     => lc,
     Q      => Q,
-    nEF    => ctrl_in(6 DOWNTO 4),
+    nEF    => nEF_i,
+    nINT   => uart_a_nint_i,
     reset  => ctrl_in(0),
     halt   => ctrl_in(1),
     single => ctrl_in(2),
@@ -255,7 +276,8 @@ BEGIN
     rx_data           => uart_rx_data,
     rx_data_available => uart_rx_available,
     tx_data       => uart_a_tx_data_i,
-    tx_data_valid => uart_a_tx_valid_i
+    tx_data_valid => uart_a_tx_valid_i,
+    nINT          => uart_a_nint_i
   );
 
   -- Raw pass-through, unchanged meaning -- see header comment.

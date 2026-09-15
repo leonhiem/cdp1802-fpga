@@ -65,7 +65,17 @@ ENTITY cs1800_console IS
     uart_a_tx_data  : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
     uart_a_tx_valid : OUT STD_LOGIC;
     uart_b_tx_data  : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
-    uart_b_tx_valid : OUT STD_LOGIC
+    uart_b_tx_valid : OUT STD_LOGIC;
+
+    -- Port A receive side, 2026-09-15 -- see BRINGUP_LOG.md's
+    -- interrupt-wiring entry: lets a testbench inject a received
+    -- character (e.g. to exercise the "DMP" command interactively) the
+    -- same way boards/cora-z7-07s/hdl/cs1800_prcx18_top.vhd already lets
+    -- Linux do on real hardware. Defaults keep every existing
+    -- testbench's behavior unchanged. Port B has no receive side here --
+    -- see the interrupt-wiring note below for why only port A matters.
+    uart_a_rx_data      : IN STD_LOGIC_VECTOR(7 DOWNTO 0) := (OTHERS => '0');
+    uart_a_rx_available : IN STD_LOGIC := '0'
   );
 END cs1800_console;
 
@@ -89,12 +99,29 @@ ARCHITECTURE str OF cs1800_console IS
   SIGNAL uart_a_dout : STD_LOGIC_VECTOR(7 DOWNTO 0);
   SIGNAL uart_b_dout : STD_LOGIC_VECTOR(7 DOWNTO 0);
 
+  -- Interrupt wiring, 2026-09-15 -- see BRINGUP_LOG.md's entry and the
+  -- user's own SIO board schematic description (3 NAND gates + 2
+  -- diodes): gate 1 ORs both CDP1854 ports' INT together onto the
+  -- shared backplane nINT; gate 3 pulls EF2 low only while Q is also
+  -- high (lets firmware identify "am I the interrupt source" by
+  -- setting Q=1 and polling EF2). Port B isn't needed here (only port A
+  -- is a real, used console -- see doc/CS1800_HARDWARE.md), so this
+  -- collapses gate 1 to just port A's INT.
+  SIGNAL uart_a_nint_i : STD_LOGIC;
+  SIGNAL nEF_i         : STD_LOGIC_VECTOR(2 DOWNTO 0);
+
 BEGIN
 
   Q <= q_i;
 
   sel1_n <= '0' WHEN n_i = "001" ELSE '1';
   sel4_n <= '0' WHEN (n_i = "100" AND q_i = '1') ELSE '1';
+
+  -- EF1/EF3 pass straight through from the testbench; EF2 is now live,
+  -- computed from the real UART interrupt condition (gate 3 above).
+  nEF_i(0) <= nEF(0);
+  nEF_i(2) <= nEF(2);
+  nEF_i(1) <= '0' WHEN (uart_a_nint_i = '0' AND q_i = '1') ELSE '1';
 
   uart_a_nsel <= '0' WHEN (sel4_n = '0' AND io_sel_reg(2) = '0') ELSE '1';
   uart_b_nsel <= '0' WHEN (sel4_n = '0' AND io_sel_reg(2) = '1') ELSE '1';
@@ -106,7 +133,8 @@ BEGIN
     CLOCK => CLOCK,
     LC    => LC,
     Q     => q_i,
-    nEF   => nEF,
+    nEF   => nEF_i,
+    nINT  => uart_a_nint_i,
 
     reset  => reset,
     halt   => halt,
@@ -166,8 +194,11 @@ BEGIN
     rsel => io_sel_reg(1),
     nWE  => nmrd_i,
     nOE  => nmwr_i,
+    rx_data           => uart_a_rx_data,
+    rx_data_available => uart_a_rx_available,
     tx_data       => uart_a_tx_data,
-    tx_data_valid => uart_a_tx_valid
+    tx_data_valid => uart_a_tx_valid,
+    nINT          => uart_a_nint_i
   );
 
   u_uart_b : ENTITY work.cdp1854

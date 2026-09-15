@@ -1251,3 +1251,80 @@ interactive commands like `DMP`/`TSKL` per the user -- not needed to
 reach the prompt itself), and a proper simulation-side per-TPB dump of
 the real ROM's expected trace for future hardware-vs-simulation
 comparisons.
+
+## 2026-09-15: real interrupt/EF2 wiring
+
+Before touching VHDL, tried to answer the user's own question --
+"does PRCX-18 actually require interrupts for keyboard input?" --
+from the disassembly alone. Result: **inconclusive**. The boot-time
+`OUT 1`/`OUT 4` sequence at `0x000A`-`0x0017` turned out to be a
+generic device-clear/probe sweep (broadcasting whatever garbage
+happens to be in RAM `0xE0`-`0xE6` to every port), not the UART
+config write `doc/PRCX18_ANALYSIS.md` already found (control byte
+`0x1B`, `IE=0`). The real config write is table-driven -- a generic
+"write configured byte to device" routine at `0x0FA8`-`0x0FAE` that
+loads its bytes indirectly through registers, not as inline
+immediates -- and the surrounding code is dense with `SEP`-based
+micro-dispatch, which (per the analysis doc's own warning) desyncs a
+linear disassembly at every dispatch point. Chasing the real control
+table through that would need a proper control-flow-aware
+disassembler, not a search for byte patterns. Verdict: build the
+hardware and test empirically, as the user already suggested.
+
+Implemented the interrupt path per the user's own SIO board schematic
+description (3 NAND gates + 2 diodes), port A only (port B not
+needed, confirmed with the user):
+
+- `cdp1854.vhd`: added a real `nINT` output, asserted when `IE`
+  (Control Register bit 5) is set AND `DA` or `THRE` is true (Table 4/
+  the interrupt-clearing table in `doc/CDP1854_UART.md`). Documented a
+  known model limitation: `THRE` is tied permanently `'1'` in this
+  simplified model (no real shift-register timing -- see the file's
+  existing "Deliberate simplifications"), so an `IE`-enabled transmit
+  side would interrupt continuously rather than once per character;
+  harmless for the receive-driven (keyboard) case this is for.
+- `cs1800.vhd`: added a real `nINT` input port, default `'1'`
+  (inactive) so every existing instantiation is unaffected unless
+  wired up -- replaces what had been a hardcoded-inactive internal
+  signal (confirmed via `git blame`-level inspection this session
+  that it was never a port at all).
+- `cs1800_console.vhd` (simulation) and `cs1800_prcx18_top.vhd` (real
+  hardware): `EF2` is now computed live as
+  `NOT(cdp1854's nINT = '0' AND Q = '1')` -- gate 3, the
+  "who is the interrupt source" identification trick -- replacing a
+  static testbench-/`ctrl_in`-supplied value. The system `nINT` is fed
+  straight from port A's UART (gate 1 collapsed to one source, per the
+  user's "we don't need port B" direction). `EF1`/`EF3` stay under
+  manual control (`ctrl_in`/testbench-driven) as before -- only `EF2`
+  is live. Also added `uart_a_rx_data`/`uart_a_rx_available` ports to
+  `cs1800_console.vhd` (mirroring what `cs1800_prcx18_top.vhd` already
+  had for real hardware), so a future testbench can inject a typed
+  character in simulation too.
+
+Verified both ways before calling it done, per this project's
+standing discipline:
+
+1. Full GHDL golden-reference regression (`sim/ghdl/run.sh` +
+   `boards/cora-z7-07s/sim/run.sh`): zero diffs against every
+   reference file -- expected, since `IE` is `0` throughout the
+   already-proven boot sequence, so the new logic is a no-op until
+   firmware actually turns interrupts on.
+2. The real ROM through the actual hardware design (local-only
+   `doc/cs1800_hardware_source/tb_prcx18_lutram.vhd`, `cs1800_prcx18_top`
+   with `g_ram_words => 2048`, the `A_full`/Block-RAM design that's
+   now on real silicon): still produces the exact same byte-for-byte
+   boot capture (`Dutch 1800 MicroProUsers` / `CS1800/PRCX-18
+   V1.9.0` / `-SYS-Starting Console Task-` / `_08>`) as milestone 3n's
+   real-hardware success.
+
+Not yet done: any receive-side handshake logic (clearing `DA`/
+`uart_rx_available` automatically once the CPU reads the Receiver
+Holding register -- currently Linux has to clear it itself via
+devmem, unchanged from the existing "no receive-side handshake logic
+here yet" design note), and no real hardware test yet of an actual
+keystroke triggering an interrupt and being consumed by PRCX-18's
+`DMP` command. Next step: build and reprogram the real board with
+this wiring, then try injecting a character via `uart_rx_data`/
+`uart_rx_available` over devmem while the OS is sitting at its prompt,
+and watch (via ILA or the TX FIFO) whether it's consumed at all --
+the empirical test that the disassembly alone couldn't settle.
