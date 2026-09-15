@@ -3,112 +3,80 @@
 -- File Name: cs1800_prcx18_memory.vhd
 -- Author: Leon Hiemstra
 --
--- Title: Real ROM+RAM memory for the CS1800 board bring-up (LUTRAM)
+-- Title: Real ROM+RAM memory for the CS1800 board bring-up (Block RAM)
 --
 -- License: MIT
 --
 -- Description:
---   A real Block-RAM-based, wait-stated version of this entity was
---   tried first and abandoned: synchronous reads need the CPU held via
---   its mem_wait/PAUSE input while they settle, and that genuinely
---   corrupted execution a few instructions in (root-caused down to
---   cycle level: an address register went undefined on the third
---   machine cycle, reproducible, not yet fully explained) -- exactly
---   the kind of deep core-timing risk not worth taking here. Back to
---   the proven, zero-timing-risk approach instead: async read, the
---   exact same timing as ram.vhd/shared_ram.vhd (both already
---   hardware-proven), which forces distributed RAM (LUTRAM) -- and
---   LUTRAM on this part is capped at ~6000 LUTs total (shared_ram.vhd's
---   own header), nowhere near enough for the real 16KB minimum (8KB
+--   Real Block-RAM-based, synchronous-read memory, 2026-09-15 (see
+--   boards/cora-z7-07s/BRINGUP_LOG.md's "milestone 3l") -- replaces
+--   this file's earlier LUTRAM/async-read design. LUTRAM on this part
+--   is capped at ~6000 LUTs, nowhere near the real 16KB minimum (8KB
 --   ROM + 8KB RAM) the user proved by pulling chips from the actual
---   rack.
+--   rack, let alone the real backplane's full 48-56KB -- that ceiling,
+--   not this design's own logic, was the reason RAM had to be
+--   undersized (1KB) at all, and undersized RAM is what left PRCX-18
+--   stuck retrying its Console Task instead of reaching a real prompt
+--   (see the size/tradeoff table this header used to carry -- now in
+--   git history). Block RAM on this part has orders of magnitude more
+--   capacity, so this isn't a tradeoff anymore: default size below now
+--   matches the real minimum config directly (8KB ROM + 8KB RAM =
+--   16KB), well above the 4KB already proven sufficient in simulation
+--   (`doc/PRCX18_ANALYSIS.md`).
 --
---   So: the full 8KB ROM (fixed -- that's the real firmware) plus as
---   much RAM as comfortably fits underneath that LUTRAM ceiling.
+--   A first synchronous-memory attempt (this file's own earlier
+--   header) was tried and abandoned: it used the CDP1802's real
+--   `nWAIT`/PAUSE dynamic wait-state mechanism and found "an address
+--   register went undefined on the third machine cycle." A second
+--   attempt (`BRINGUP_LOG.md`'s "milestone 3k") tried a plain
+--   registered read fed by this design's *externally-reconstructed*
+--   address (`ram_addr` = `TPA`-latched high byte + live low byte,
+--   mirroring the real memory board's 4042 latch ICs) and also failed
+--   -- proven via GHDL's own metavalue tracking, not just a bad-
+--   looking trace -- because that reconstruction is only valid during
+--   part of each machine cycle by construction (the real chip's `ADDR`
+--   pin is only 8 bits, time-multiplexed between address bytes; see
+--   `doc/CDP1802_MEMORY_TIMING.md`, distilled from the real CDP1802
+--   datasheet's own timing diagram). Registering a read on every
+--   `CLOCK` edge sometimes captured it mid-transition.
 --
---   How much RAM PRCX-18 actually needs vs. how much fits (both found
---   empirically, in simulation for function and in real Vivado
---   synthesis for the LUTRAM budget):
---     1KB  (256 words)  -- functionally FAILS: boots the banner but
---                          loops forever repeating
---                          "-SYS-Starting Console Task-", never reaching
---                          the prompt (almost certainly the Console
---                          Task failing to allocate memory and retrying
---                          -- matches the PRCX-18 v1.9.0 error strings,
---                          E2?/PSIZE=00, which suggest it's designed to
---                          detect available RAM and degrade gracefully
---                          rather than require a fixed amount).
---     1.5KB (384 words) -- functionally FAILS, same symptom as 1KB.
---     1.75KB (448 words) -- also functionally FAILS (same symptom),
---                          confirmed but not fully bisected past this.
---     2KB  (512 words)  -- functionally SUCCEEDS: reaches a real
---                          prompt ("_00>", a smaller-RAM variant of the
---                          same "_08>" prompt 4KB gives -- both are
---                          full, non-stuck successes). Does NOT fit the
---                          LUTRAM budget: 6134/6000 (102.23%).
---     4KB  (1024 words) -- functionally SUCCEEDS, byte-for-byte
---                          identical to the full run against real
---                          hardware (see doc/PRCX18_ANALYSIS.md). Badly
---                          overshoots the LUTRAM budget: 7158/6000
---                          (119.30%).
---   So within the tested range, no single size fits the resource
---   budget AND fully boots PRCX-18 -- the threshold for "fits" sits
---   somewhere below 1.75KB and the threshold for "boots" sits somewhere
---   above 1.75KB, i.e. they don't overlap. A real fix (e.g. a corrected
---   wait-state/Block-RAM approach) is future work, not attempted here.
+--   This design sidesteps that reconstruction problem entirely instead
+--   of solving it: `cdp1802.vhd`/`cs1800.vhd` gained a new `A_full`
+--   port (2026-09-15, additive, no behavior change to anything already
+--   using them) exposing the CPU's *own* internal 16-bit address
+--   register directly -- the same value `ADDR`/`TPA` eventually
+--   multiplex out to 8 pins, just one step earlier and never split up,
+--   genuinely stable for a whole access, no external latch needed at
+--   all. `a_address` below is fed from that, not from a `ram_addr`-
+--   style reconstruction. Verified byte-for-byte identical against the
+--   golden reference this way, with zero GHDL metavalue warnings,
+--   before ever touching hardware -- see BRINGUP_LOG.md's "milestone
+--   3l" for the simulation experiment that proved this out
+--   (`ram_sync.vhd`/`cdp18_sync.vhd`, `src/vhdl/`).
 --
---   Real hardware-only bug #1 found and fixed, 2026-09-14: the original
---   384-word (1.5KB) choice -- not a power of two, picked purely to
---   hit the LUTRAM budget as closely as possible -- forced the RAM
---   index's address decode to compute a genuine subtract-then-MOD-384
---   (a non-power-of-two modulo needs a real combinational divider, not
---   a bit-slice) on *every* read, unconditionally, even ROM ones. Fixed
---   by requiring a power of two there (256 words) -- a real, verified
---   improvement (the CPU ran measurably further before the next hang),
---   but not sufficient on its own -- see bug #2.
+--   Real hardware-only bugs #1 and #2 (non-power-of-two modulo
+--   divider; two-array data-level mux hazard), found and fixed
+--   2026-09-14 in the old LUTRAM design, don't apply to the shape here
+--   (still one array, one muxed index, power-of-two RAM window -- see
+--   git history for the full account) but the underlying lesson
+--   (single array, single index, no unregistered mux combining two
+--   live values) is exactly what this design continues to follow.
 --
---   Real hardware-only bug #2 found and fixed, 2026-09-14: even with
---   bug #1's fix, this file still kept ROM and RAM as two *separate*
---   arrays, each read unconditionally on every access, combined via a
---   data-level 2:1 mux (selecting between rom(rom_idx) and ram(ram_idx)
---   -- see git history for the exact prior shape). That's a shape no
---   previously-proven design here (ram.vhd, shared_ram.vhd) ever uses.
---   The hazard: even while a_is_rom's *value* stays constant (e.g. the
---   whole time execution stays inside ROM), the mux's other input
---   (ram(ram_idx)) is still a live signal changing on every address
---   transition -- an unregistered 2:1 mux with a constantly-changing
---   "losing" input is a textbook static-hazard setup, independent of
---   how simple that input's own address decode is. On real hardware
---   this looked like the CPU hanging in a tight 2-address loop, stuck
---   in the execute state (SC never returning to fetch) -- confirmed via
---   ILA, GHDL again saw nothing (zero-delay simulation can't model this
---   at all). Fixed by merging rom and ram into one array (mem) and
---   muxing the *index* once before a single read, never the data after
---   two independent reads -- exactly the same safe idiom the write side
---   (and shared_ram.vhd generally) already used. Now there is exactly
---   one array, one read, matching shared_ram.vhd's proven shape as
---   closely as a write-protected ROM region allows.
---
---   Separate, real hazard worth remembering (not what either bug above
---   was, but inherent to ANY undersized RAM window here): PRCX-18 was
---   written assuming the real backplane's full, non-aliased 48-56KB of
---   SRAM. Whatever fraction of that we can't fit gets aliased -- two
---   pages the firmware believes are completely distinct can be the
---   same physical bytes here. That's silent cross-page corruption, not
---   just a capacity shortfall, and it doesn't go away by picking a
---   power of two -- only by eventually fitting enough real, non-aliased
---   RAM to match what the firmware assumes.
---
---   Port A: CPU-facing, same signature and timing as ram.vhd/
---   shared_ram.vhd's (async read, synchronous write, single-port
---   timing arbitrated by sel_ext). Writes to the ROM region from Port A
---   are silently ignored, matching a real EPROM's WE pin doing nothing.
+--   Port A: CPU-facing. Write timing unchanged from before (already
+--   synchronous). Read is now registered (1-cycle latency) instead of
+--   async/combinational -- the real Block-RAM shape, safe here
+--   specifically because `a_address` is fed from `A_full` (see above),
+--   not a time-multiplexed reconstruction. Writes to the ROM region
+--   from Port A are silently ignored, matching a real EPROM's WE pin
+--   doing nothing.
 --   Port B: axi_bram_ctrl's native BRAM_PORTA shape (32-bit, 4-bit
 --   byte-enable -- fixed regardless of AXI data width, see
 --   shared_ram.vhd's header), used to load the real ROM image at
 --   runtime -- never embedded here. Port B can write anywhere,
 --   including the ROM region -- that's how the real ROM image actually
---   gets loaded, exactly like shared_ram.vhd's Port B loads a program.
+--   gets loaded. Port B's read stays combinational/unregistered
+--   (unchanged) -- axi_bram_ctrl already tolerates that today, and
+--   this fix only ever targeted Port A's real-time hazard.
 --
 -------------------------------------------------------------------------------
 
@@ -121,13 +89,17 @@ USE work.test_program_pkg.ALL;
 
 ENTITY cs1800_prcx18_memory IS
   GENERIC (
-    g_ram_words : INTEGER := 256 -- 32-bit words of RAM above the 8KB ROM (256 = 1KB, 4 full CDP1802 pages -- MUST be a power of two, see this file's header's "bug #1" note; cs1800_prcx18_top.vhd always passes its own generic through anyway)
+    g_ram_words : INTEGER := 2048 -- 32-bit words of RAM above the 8KB ROM (2048 = 8KB, matching the real minimum config the user pulled from the rack -- MUST be a power of two, see this file's header's "bug #1" note; cs1800_prcx18_top.vhd always passes its own generic through anyway)
   );
   PORT (
     clk     : IN STD_LOGIC;
     sel_ext : IN STD_LOGIC; -- '1': Port B may write. '0': Port A may write.
 
-    -- Port A: CPU-facing, ram.vhd/shared_ram.vhd's exact timing.
+    -- Port A: CPU-facing. a_address must be A_full (cdp1802.vhd's own
+    -- internal, already-settled 16-bit address) -- see this file's
+    -- header for why the older TPA-latched-reconstruction idiom
+    -- (ram_addr elsewhere in this repo) isn't safe to feed a
+    -- registered read.
     a_address  : IN  STD_LOGIC_VECTOR(15 DOWNTO 0);
     a_data_in  : IN  STD_LOGIC_VECTOR(7 DOWNTO 0);
     a_data_out : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
@@ -201,6 +173,11 @@ ARCHITECTURE str OF cs1800_prcx18_memory IS
 
   SIGNAL a_is_rom : STD_LOGIC;
 
+  -- Port A's registered read state -- see the read process below.
+  SIGNAL a_word_reg : STD_LOGIC_VECTOR(31 DOWNTO 0);
+  SIGNAL a_lane_reg : STD_LOGIC_VECTOR(1 DOWNTO 0);
+  SIGNAL a_sel_reg  : STD_LOGIC;
+
 BEGIN
 
   eff_addr    <= b_addr WHEN sel_ext = '1' ELSE a_address;
@@ -244,37 +221,46 @@ BEGIN
     END IF;
   END PROCESS;
 
-  -- Port A read: zero-latency combinational, one static-slice lane
-  -- selected via a case on the address's low 2 bits, off ONE array
-  -- read using a single muxed index (see "bug #2" above -- this used
-  -- to be two independent array reads combined by a data-level mux).
-  PROCESS (a_address, a_nCS, a_nOE, a_is_rom, mem) IS
+  -- Port A read: registered (1-cycle latency, real Block-RAM shape),
+  -- off ONE array read using a single muxed index. Registers the whole
+  -- word + which byte lane + whether this access was even selected
+  -- together, in lockstep, so a_data_out (below, purely combinational)
+  -- only ever derives from one self-consistent, already-settled
+  -- snapshot -- never mixes a freshly-changing address with a
+  -- previous cycle's word the way an unregistered post-read mux would
+  -- (see this file's "bug #2" history for exactly that hazard shape).
+  PROCESS (clk) IS
     VARIABLE rom_idx : NATURAL RANGE 0 TO c_rom_words - 1;
     VARIABLE ram_idx : NATURAL RANGE 0 TO g_ram_words - 1;
     VARIABLE idx     : NATURAL RANGE 0 TO c_mem_words - 1;
-    VARIABLE word    : STD_LOGIC_VECTOR(31 DOWNTO 0);
   BEGIN
-    a_data_out <= (OTHERS => '0'); -- chip is not selected / not reading
-    IF (a_nCS = '0' AND a_nOE = '0') THEN
-      rom_idx := to_integer(unsigned(a_address(12 DOWNTO 2)));
-      ram_idx := to_integer(unsigned(a_address(c_ram_addr_bits + 1 DOWNTO 2)));
-      IF a_is_rom = '1' THEN
-        idx := rom_idx;
+    IF rising_edge(clk) THEN
+      IF (a_nCS = '0' AND a_nOE = '0') THEN
+        rom_idx := to_integer(unsigned(a_address(12 DOWNTO 2)));
+        ram_idx := to_integer(unsigned(a_address(c_ram_addr_bits + 1 DOWNTO 2)));
+        IF a_is_rom = '1' THEN
+          idx := rom_idx;
+        ELSE
+          idx := c_rom_words + ram_idx;
+        END IF;
+        a_word_reg <= mem(idx);
+        a_lane_reg <= a_address(1 DOWNTO 0);
+        a_sel_reg  <= '1';
       ELSE
-        idx := c_rom_words + ram_idx;
+        a_sel_reg <= '0'; -- chip not selected / not reading
       END IF;
-      word := mem(idx);
-      CASE a_address(1 DOWNTO 0) IS
-        WHEN "00"   => a_data_out <= word(7 DOWNTO 0);
-        WHEN "01"   => a_data_out <= word(15 DOWNTO 8);
-        WHEN "10"   => a_data_out <= word(23 DOWNTO 16);
-        WHEN OTHERS => a_data_out <= word(31 DOWNTO 24);
-      END CASE;
     END IF;
   END PROCESS;
 
+  a_data_out <= (OTHERS => '0') WHEN a_sel_reg = '0' ELSE
+                a_word_reg(7 DOWNTO 0)   WHEN a_lane_reg = "00" ELSE
+                a_word_reg(15 DOWNTO 8)  WHEN a_lane_reg = "01" ELSE
+                a_word_reg(23 DOWNTO 16) WHEN a_lane_reg = "10" ELSE
+                a_word_reg(31 DOWNTO 24);
+
   -- Port B read: the whole word, one array read off the same single
-  -- muxed index, no concatenation of separate elements.
+  -- muxed index, no concatenation of separate elements. Left
+  -- combinational/unregistered -- see file header.
   b_dout <= mem(c_rom_words + to_integer(unsigned(b_addr(c_ram_addr_bits + 1 DOWNTO 2))))
               WHEN b_addr(15 DOWNTO 13) /= "000" ELSE
             mem(to_integer(unsigned(b_addr(12 DOWNTO 2))));

@@ -14,26 +14,28 @@
 --
 --   The two sides are never accessed at once in practice: cs1800 is
 --   held in reset while software writes a program, then released to
---   run. So this isn't true dual-port memory (which real Block RAM
---   would require, but only synchronously -- see the design log for
---   why a first attempt at that broke real timing-critical reads
---   inside cdp1802). Instead: two independent, zero-latency
---   combinational reads (real distributed RAM natively supports this
---   -- one write port, two read ports) and ONE arbitrated write,
---   selected by sel_ext (driven from cs1800's own reset bit: '1' while
---   held in reset hands write access to Port B, '0' while running
---   hands it back to Port A). Port A's read/write timing is exactly
---   src/vhdl/ram.vhd's (see its own header for why that's synthesis-
---   safe), so cs1800's own behavior is provably unchanged from before.
+--   run, so this isn't true dual-port memory, just ONE arbitrated
+--   write, selected by sel_ext ('1' while held in reset hands write
+--   access to Port B, '0' while running hands it back to Port A).
 --
---   4KB, not the real backplane's 64KB: Port A's async read (needed to
---   keep this timing-safe, see above) means real Block RAM -- which is
---   inherently synchronous-read only -- can't be used, so this maps to
---   distributed RAM (LUTRAM) regardless of size. 64KB of LUTRAM doesn't
---   fit (confirmed by trying it: ~33,000 LUTs needed against this
---   part's ~6,000-LUT LUTRAM budget). 4KB -- 16x today's proven
---   276-byte test program, real headroom for hand-written test
---   programs -- fits comfortably. a_address/b_addr both stay full
+--   Port A's read is now registered (1-cycle latency, real Block-RAM
+--   shape), 2026-09-15 (see boards/cora-z7-07s/BRINGUP_LOG.md's
+--   "milestone 3l"), fed by a_address = A_full (cdp1802.vhd's own
+--   internal, already-settled 16-bit address -- see its and
+--   cs1800.vhd's own notes on that new port) rather than the older
+--   combinational-read design this file carried before, which is what
+--   a real hardware-only bug traced back to (milestone 3j: a single
+--   bit flipped reading address 0x00B3, non-deterministic across
+--   rebuilds -- see git history for that design). An even earlier
+--   registered-read attempt, fed by the CPU's *externally*-
+--   reconstructed, TPA-latched address instead of A_full, also failed
+--   (milestone 3k, GHDL-proven internal corruption) -- see
+--   cs1800_prcx18_memory.vhd's header for the full account of why
+--   A_full specifically is what makes this safe.
+--
+--   4KB, not the real backplane's 64KB -- real Block RAM has far more
+--   capacity than that on this part; this size was never the
+--   constraint, just never revisited. a_address/b_addr both stay full
 --   16-bit ports (matching cs1800's real 16-bit address bus and
 --   axi_bram_ctrl's bram_addr_a exactly); only the low 12 bits actually
 --   address memory, the top 4 are ignored -- exactly how a real
@@ -69,7 +71,9 @@ ENTITY shared_ram IS
     clk     : IN STD_LOGIC;
     sel_ext : IN STD_LOGIC; -- '1': Port B may write. '0': Port A may write.
 
-    -- Port A: CPU-facing, same signature and timing as src/vhdl/ram.vhd's.
+    -- Port A: CPU-facing. a_address must be A_full (cdp1802.vhd's own
+    -- internal, already-settled 16-bit address) -- see this file's
+    -- header for why.
     a_address  : IN  STD_LOGIC_VECTOR(15 DOWNTO 0);
     a_data_in  : IN  STD_LOGIC_VECTOR(7 DOWNTO 0);
     a_data_out : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
@@ -120,6 +124,11 @@ ARCHITECTURE str OF shared_ram IS
   SIGNAL eff_we        : STD_LOGIC_VECTOR(3 DOWNTO 0);
   SIGNAL eff_en        : STD_LOGIC;
 
+  -- Port A's registered read state -- see the read process below.
+  SIGNAL a_word_reg : STD_LOGIC_VECTOR(31 DOWNTO 0);
+  SIGNAL a_lane_reg : STD_LOGIC_VECTOR(1 DOWNTO 0);
+  SIGNAL a_sel_reg  : STD_LOGIC;
+
 BEGIN
 
   -- Only the low 12 address bits are used (4KB) -- see the FPGA note above.
@@ -155,23 +164,32 @@ BEGIN
     END IF;
   END PROCESS;
 
-  -- Port A read: zero-latency combinational, one static-slice lane
-  -- selected via a case on the address's low 2 bits (no dynamic-bound
-  -- slicing).
-  PROCESS (a_address, a_nCS, a_nOE, mem) IS
+  -- Port A read: registered (1-cycle latency, real Block-RAM shape),
+  -- one static-slice lane. Registers the whole word + which byte lane
+  -- + whether this access was even selected together, in lockstep, so
+  -- a_data_out (below, purely combinational) only ever derives from
+  -- one self-consistent, already-settled snapshot. See file header for
+  -- why this is only safe with a_address = A_full.
+  PROCESS (clk) IS
     VARIABLE word_idx : NATURAL RANGE 0 TO 1023;
   BEGIN
-    a_data_out <= (OTHERS => '0'); -- chip is not selected / not reading
-    IF (a_nCS = '0' AND a_nOE = '0') THEN
-      word_idx := to_integer(unsigned(a_address(11 DOWNTO 2)));
-      CASE a_address(1 DOWNTO 0) IS
-        WHEN "00"   => a_data_out <= mem(word_idx)(7 DOWNTO 0);
-        WHEN "01"   => a_data_out <= mem(word_idx)(15 DOWNTO 8);
-        WHEN "10"   => a_data_out <= mem(word_idx)(23 DOWNTO 16);
-        WHEN OTHERS => a_data_out <= mem(word_idx)(31 DOWNTO 24);
-      END CASE;
+    IF rising_edge(clk) THEN
+      IF (a_nCS = '0' AND a_nOE = '0') THEN
+        word_idx := to_integer(unsigned(a_address(11 DOWNTO 2)));
+        a_word_reg <= mem(word_idx);
+        a_lane_reg <= a_address(1 DOWNTO 0);
+        a_sel_reg  <= '1';
+      ELSE
+        a_sel_reg <= '0'; -- chip not selected / not reading
+      END IF;
     END IF;
   END PROCESS;
+
+  a_data_out <= (OTHERS => '0') WHEN a_sel_reg = '0' ELSE
+                a_word_reg(7 DOWNTO 0)   WHEN a_lane_reg = "00" ELSE
+                a_word_reg(15 DOWNTO 8)  WHEN a_lane_reg = "01" ELSE
+                a_word_reg(23 DOWNTO 16) WHEN a_lane_reg = "10" ELSE
+                a_word_reg(31 DOWNTO 24);
 
   -- Port B read: the whole word, one array read, no concatenation of
   -- separate elements.

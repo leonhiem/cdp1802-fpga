@@ -99,6 +99,11 @@ ARCHITECTURE str OF cs1800_top IS
   SIGNAL ram_rdata : STD_LOGIC_VECTOR(7 DOWNTO 0);
   SIGNAL ram_nmrd  : STD_LOGIC;
   SIGNAL ram_nmwr  : STD_LOGIC;
+  -- cdp1802's own internal, already-settled 16-bit address -- what
+  -- actually drives shared_ram now (see its header and cs1800.vhd's
+  -- A_full note). ram_addr above stays purely for dbg_ram_addr/ILA
+  -- visibility, same as before.
+  SIGNAL a_full_i  : STD_LOGIC_VECTOR(15 DOWNTO 0);
 
 BEGIN
 
@@ -138,7 +143,8 @@ BEGIN
     dbg_tmp_page => dbg_tmp_page,
     dbg_R_in     => dbg_R_in,
     dbg_forceS1  => dbg_forceS1,
-    dbg_extraS1  => dbg_extraS1
+    dbg_extraS1  => dbg_extraS1,
+    A_full       => a_full_i
   );
 
   dbg_ram_addr <= ram_addr;
@@ -155,7 +161,7 @@ BEGIN
     clk     => CLOCK,
     sel_ext => ctrl_in(0), -- '1' while reset is asserted
 
-    a_address  => ram_addr,
+    a_address  => a_full_i,
     a_data_in  => ram_wdata,
     a_data_out => ram_rdata,
     a_nWE      => ram_nmwr,

@@ -874,3 +874,107 @@ out to be, whack-a-moling individual routing-dependent manifestations
 of the `OR`-merge-style hazard (milestone 3g/3h/3j) may honestly be the
 more tractable path in the near term, even though it doesn't close the
 whole class at once.
+
+## 2026-09-15: milestone 3l -- the fix: A_full, and PRCX-18 reaches its real prompt in simulation
+
+The user, after milestone 3k's negative result, pointed out the actual
+mechanism directly (confirmed against the real memory board's own
+schematic: `TPA` clocks the high address byte into 4042 latch ICs
+straight off the backplane) and asked whether the real CDP1802
+datasheet's own timing diagram was available locally rather than
+needing a fresh screenshot. It was (`~/Cdp1802-datasheet.pdf`, 27
+pages, no `pdftoppm` on this machine so rendered with `gs` instead --
+see the new `doc/CDP1802_MEMORY_TIMING.md` and the `cdp1802-datasheet`
+memory entry for how). Page 9's `Figure 3` confirmed the exact
+mechanism and gave a real number: `tACC` (address-to-data) = `5T-250ns`
+typical -- a real memory chip gets nearly 5 whole `CLOCK` periods.
+
+**The actual fix, found from that reading**: the real chip's `ADDR`
+pin is only 8 bits *because it's a real 40-pin package* -- a
+constraint that doesn't exist for a fully-integrated FPGA design at
+all. `cdp1802.vhd`'s internal address register (`A_out`, written by
+`wr_A`, always at `clk_cnt=0`) already holds the complete, settled
+16-bit address *before* `ADDR`/`TPA` ever multiplex it out to 8 pins --
+milestone 3k's failure was entirely an artifact of reconstructing that
+16 bits back out of the narrow external bus, not anything wrong with
+registering a read per se. Added a new `A_full` port
+(`cdp1802.vhd`->`cs1800_cpu.vhd`->`cs1800.vhd`, purely additive, same
+"no real chip pin" pattern as the earlier debug taps) exposing `A_out`
+directly, and fed *that* to a registered read instead.
+
+**Verified in simulation first, same discipline as every fix today**:
+rebuilt the milestone-3k experiment (`ram_sync.vhd`/`cdp18_sync.vhd`)
+with the one change (`A_full` instead of the `ram_addr`
+reconstruction) -- **byte-for-byte identical to the golden reference,
+zero `NUMERIC_STD` metavalue warnings** (down from 3523). Confirms the
+theory exactly: a genuinely stable, non-multiplexed address is all a
+registered read ever needed.
+
+**Applied to both real memory designs, in place** (not new "_sync"
+files this time -- the concept is proven, so evolved the actual
+target files the way milestone 3h's `cs1800.vhd` fix did):
+
+- `cs1800_prcx18_memory.vhd`: Port A read is now registered
+  (word+lane+selected captured together in lockstep, matching this
+  file's own established "single index, single read" safe shape),
+  fed by `A_full`. `g_ram_words` default raised from 256 (1KB,
+  LUTRAM-budget-constrained) to **2048 (8KB)** -- the real minimum
+  config the user identified by pulling chips from the actual rack,
+  now trivial to fit since Block RAM (inferred automatically once the
+  array is large and the read is registered) has vastly more capacity
+  than the ~6000-LUT LUTRAM ceiling that forced the undersized-RAM
+  tradeoff in the first place. Port B (AXI-facing) stays combinational,
+  unchanged -- this fix only ever targeted Port A's real-time hazard.
+- `shared_ram.vhd`/`cs1800_top.vhd`: same treatment (registered Port A
+  read, fed by `A_full`) -- this is the design milestone 3g/3h/3j's
+  `0x00B3` bit-7 corruption was found on, so this should close that
+  specific hazard too, not just the PRCX-18-specific one.
+
+**Full regression, all green, zero reference-file diffs** (`git
+status` shows none after regenerating): `sim/ghdl/run.sh` (all four
+testbenches) and `boards/cora-z7-07s/sim/run.sh` (`tb_cs1800_top`
+against the golden reference, `tb_shared_ram`'s own direct Port A/B
+checks) -- neither testbench needed any changes.
+
+**Then the real target test**: updated the local-only
+`tb_prcx18_lutram.vhd` to the new default (`g_ram_words => 2048`) and
+a longer run (20M cycles, up from 12M -- the earlier limit only ever
+needed to be long enough to demonstrate the 1KB failure symptom
+quickly). Result -- **the real PRCX-18 v1.9.0 ROM reaches its actual
+interactive prompt**:
+
+```
+Dutch 1800 MicroProUsers
+CS1800/PRCX-18    V1.9.0
+
+-SYS-Starting Console Task-
+_08>
+```
+
+No more repeating "Starting Console Task" retry loop -- the Console
+Task completes and the real prompt appears, exactly once, matching the
+success criterion `doc/PRCX18_ANALYSIS.md` already documented for the
+full-RAM simulation run. This is the first time this design (the real
+ROM/RAM split, sized to the real machine's own minimum config, no
+aliasing) has reached the prompt.
+
+**Not yet done**: this is simulation only. The whole reason this
+session's earlier bugs (3g/3h) were hardware-only and invisible to
+GHDL means simulation success here, while an excellent and necessary
+signal, is not proof real hardware will match -- especially since the
+`A_full`/registered-read mechanism is new and hasn't been synthesized
+or run on the actual board yet. Also still outstanding, per the user's
+explicit request: an XDC file (worth revisiting now -- with a properly
+registered, real Block-RAM-shaped design throughout, the unusual
+timing exceptions milestone 3g-3j's async design might have needed are
+much less likely to be necessary at all, but real timing closure
+should still be checked, not assumed).
+
+**Next**: rebuild `build_project_prcx18.tcl`/`build_project.tcl`,
+confirm Block RAM inference (not LUTRAM) and real utilization/timing
+numbers, program real hardware, and re-run the from-start ILA capture
+method (`capture_ila_from_start.tcl`) against the golden reference the
+same way milestone 3f/3g did -- this is the real test of whether
+today's whole line of investigation, starting from the user's own
+schematic reading, actually closes the gap between simulation and real
+silicon.

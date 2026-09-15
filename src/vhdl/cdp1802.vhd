@@ -37,6 +37,20 @@ ENTITY cdp1802 IS
     N        : OUT   STD_LOGIC_VECTOR(2 DOWNTO 0);
     nEF      : IN    STD_LOGIC_VECTOR(3 DOWNTO 0);
     ADDR     : OUT   STD_LOGIC_VECTOR(7 DOWNTO 0);
+    -- FPGA note, 2026-09-15 (see boards/cora-z7-07s/BRINGUP_LOG.md's
+    -- "milestone 3l" and doc/CDP1802_MEMORY_TIMING.md): ADDR's 8-bit,
+    -- time-multiplexed shape (high byte, then low byte, latched by an
+    -- external TPA-triggered register -- real 4042s on the actual
+    -- memory board) exists purely because the real 40-pin chip only
+    -- has 8 address pins. A_full is the same address the CPU already
+    -- holds internally, whole and already-clocked (register A, `p_reg_A`
+    -- below), one machine cycle before ADDR/TPA ever multiplex it onto
+    -- a narrow bus at all -- there is no reason a fully-integrated FPGA
+    -- memory needs to reconstruct that 16 bits back out of ADDR the way
+    -- external hardware must; it can just use this instead. Purely
+    -- additive: ADDR/TPA/every existing instantiation are completely
+    -- unaffected.
+    A_full   : OUT   STD_LOGIC_VECTOR(15 DOWNTO 0);
     TPA      : OUT   STD_LOGIC;
     TPB      : OUT   STD_LOGIC;
     nMWR     : OUT   STD_LOGIC;
@@ -232,6 +246,7 @@ BEGIN
   dbg_R_in    <= R_in;
   dbg_forceS1 <= forceS1;
   dbg_extraS1 <= extraS1;
+  A_full      <= A_out;
 
   u_Q : ENTITY work.ff
   PORT MAP (

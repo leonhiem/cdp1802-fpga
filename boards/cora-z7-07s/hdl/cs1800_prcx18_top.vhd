@@ -58,7 +58,7 @@ USE IEEE.NUMERIC_STD.ALL;
 ENTITY cs1800_prcx18_top IS
   GENERIC (
     g_lc_half_period : POSITIVE := 1_000_000; -- CLOCK cycles per LC half-period
-    g_ram_words      : INTEGER := 256 -- 32-bit words of RAM above the 8KB ROM (256 = 1KB, 4 full CDP1802 pages -- MUST be a power of two, see cs1800_prcx18_memory.vhd's header for why)
+    g_ram_words      : INTEGER := 2048 -- 32-bit words of RAM above the 8KB ROM (2048 = 8KB, the real minimum config -- MUST be a power of two, see cs1800_prcx18_memory.vhd's header for why)
   );
   PORT (
     CLOCK      : IN  STD_LOGIC;
@@ -109,6 +109,11 @@ ARCHITECTURE str OF cs1800_prcx18_top IS
   SIGNAL ram_rdata : STD_LOGIC_VECTOR(7 DOWNTO 0);
   SIGNAL ram_nmrd  : STD_LOGIC;
   SIGNAL ram_nmwr  : STD_LOGIC;
+  -- cdp1802's own internal, already-settled 16-bit address -- what
+  -- actually drives cs1800_prcx18_memory now (see its header and
+  -- cs1800.vhd's A_full note). ram_addr above stays purely for
+  -- dbg_ram_addr/ILA visibility, same as before.
+  SIGNAL a_full_i  : STD_LOGIC_VECTOR(15 DOWNTO 0);
 
   SIGNAL n_i    : STD_LOGIC_VECTOR(2 DOWNTO 0);
   SIGNAL tpb_i  : STD_LOGIC;
@@ -174,7 +179,8 @@ BEGIN
     dbg_tpb      => tpb_i,
     dbg_n        => n_i,
     ram_data_out_ext => ram_rdata,
-    io_data_in_ext   => io_din_i
+    io_data_in_ext   => io_din_i,
+    A_full           => a_full_i
     -- dbg_tpa/mem_wait left unconnected (default '0') -- not used here.
   );
 
@@ -192,7 +198,7 @@ BEGIN
     clk     => CLOCK,
     sel_ext => ctrl_in(0), -- '1' while reset is asserted
 
-    a_address  => ram_addr,
+    a_address  => a_full_i,
     a_data_in  => ram_wdata,
     a_data_out => ram_rdata,
     a_nWE      => ram_nmwr,

@@ -75,7 +75,17 @@ ENTITY cs1800 IS
     dbg_tmp_page : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
     dbg_R_in     : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
     dbg_forceS1  : OUT STD_LOGIC;
-    dbg_extraS1  : OUT STD_LOGIC
+    dbg_extraS1  : OUT STD_LOGIC;
+
+    -- FPGA note, 2026-09-15 (see cdp1802.vhd's own note,
+    -- boards/cora-z7-07s/BRINGUP_LOG.md's "milestone 3l"): the CPU's
+    -- own internal, already-settled 16-bit address, one machine cycle
+    -- ahead of ADDR/TPA's external, time-multiplexed reconstruction
+    -- (ram_addr below) -- meant to drive a real synchronous (Block
+    -- RAM) external memory directly, sidestepping the reconstruction's
+    -- inherent "only valid part of each cycle" limitation entirely.
+    -- Purely additive.
+    A_full : OUT STD_LOGIC_VECTOR(15 DOWNTO 0)
   );
 END cs1800;
 
@@ -134,7 +144,8 @@ BEGIN
     dbg_tmp_page => dbg_tmp_page,
     dbg_R_in     => dbg_R_in,
     dbg_forceS1  => dbg_forceS1,
-    dbg_extraS1  => dbg_extraS1
+    dbg_extraS1  => dbg_extraS1,
+    A_full       => A_full
   );
 
   p_reg_high_addr : PROCESS(tpa, addr)
