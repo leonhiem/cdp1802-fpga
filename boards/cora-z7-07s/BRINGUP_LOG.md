@@ -483,3 +483,77 @@ or out -- they were all `trigger_now` snapshots of unknown vintage.
 method (not `trigger_now`) toward the exact address where control flow
 first diverges from the golden reference's fetch-address sequence,
 somewhere between `0xA6` and `0x00C1`'s `LBR`.
+
+## 2026-09-15: milestone 3g -- found and isolated the real bug: a single-bit real-hardware read glitch at address 0x0099
+
+Wrote a small script comparing the from-start capture's full FETCH-
+address sequence (rows with `SC="00"`) against the golden reference's
+own fetch-address sequence using `difflib.SequenceMatcher` (a plain
+row-by-row diff doesn't work past the interrupt divergence at row 46 --
+golden's real interrupt-service instructions have no counterpart in
+hardware's un-interrupted run, so the two sequences drift out of index
+alignment even where the underlying code is identical; matching the
+*sequences* rather than the *rows* sidesteps that entirely). Result:
+**hardware's first 118 fetched addresses/opcodes match the golden
+reference exactly**, character for character -- then diverge.
+
+The exact divergence: golden fetches `BR` (`0x30`) at address `0x0098`
+(an unconditional short branch), then correctly continues at its
+target, `0x00B1`. Hardware instead lands at `0x00F1` immediately
+after. `0x00B1` XOR `0x00F1` = `0x40` -- a single bit (bit 6) flipped
+in the one byte `BR` reads as its jump target, at address `0x0099`.
+
+Confirmed via `test_program_pkg.vhd`'s own source: `0x0099` holds the
+literal constant `X"B1"`, never self-modified before this point in the
+program, so this isn't a self-modifying-code timing question. Two more
+checks nailed down exactly what's wrong:
+
+- **While the CPU was still parked at the wrong address (post-capture,
+  IDL at `0x00F1`)**: read address `0x0099`'s word back over the
+  independent AXI/Port B path (`devmem 0x40000098`) -- by then it
+  legitimately read back different, further-scrambled content, because
+  IDL only *pauses* the CPU (per the real 1802: it resumes at PC+1 on
+  the next DMA/interrupt, and the real 50Hz `LC` interrupt *will*
+  eventually arrive and wake it, well within the tens of seconds
+  between the capture ending and this readback) -- by the time this
+  check ran, the woken CPU had already continued executing (and this
+  program self-modifies extensively elsewhere), scrambling memory
+  further. Landing at `0x00F1`/executing `IDL` was never itself a hang
+  -- it's the CPU correctly doing exactly what `IDL` means, only
+  starting from the wrong address because of the one bad read.
+- **Fresh reprogram, read address `0x0099`'s word immediately, still
+  held in reset, before any execution at all**: `devmem 0x40000098` ->
+  `0x0057B130` -- byte `0x0099` = `0xB1`, exactly correct. This proves
+  the stored ROM content itself is fine; the corruption happens
+  specifically when **the running CPU reads that address on real
+  hardware**, not in how it's stored.
+
+This reproduced identically across two separate from-start captures
+(same wrong target, `0x00F1`, both times) -- deterministic, not a
+random glitch, at least at this specific address/timing.
+
+**Why this is a big deal**: this is on `cs1800_top`+`shared_ram` -- the
+plainest design in this repo, no ROM/RAM split, no `cs1800_prcx18_*`
+files involved at all. `shared_ram.vhd`'s own read path (checked
+directly, see its listing) already uses the exact single-array/single-
+index/one-`CASE`-read shape this session's earlier fixes moved
+`cs1800_prcx18_memory.vhd` *to* -- there's no obvious hazard shape in
+it to point at. That makes the CPU core's own data-capture path
+(`cdp1802.vhd`/`instr.vhd`/`dmux.vhd` -- wherever the D register
+latches the incoming memory bus) the more likely suspect: a genuine,
+previously-undiscovered real-hardware-only hazard in code shared by
+*every* design in this repo, not a board-level memory bug. Nobody
+found this before because nobody previously verified this design's
+execution past address `0x00C3`/row 46 against the golden reference
+until milestone 3f's corrected capture method made that possible.
+
+**Next**: look at `cdp1802.vhd`/`instr.vhd`/`dmux.vhd`'s D-register
+capture path for the same class of hazard already fixed twice today
+(an unregistered mux with a live, changing "losing" input, or a
+combinational read whose result is sampled before it's fully settled).
+Also worth checking whether this is *always* address `0x0099`
+specifically, or whether it's actually a timing-window hazard that
+happens to land on whatever byte is being fetched at a particular
+point in the boot sequence -- rerunning against a different program
+(or the same one with padding/NOPs inserted before this point) would
+tell them apart.
