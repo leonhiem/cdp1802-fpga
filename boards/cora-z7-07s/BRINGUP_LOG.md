@@ -716,3 +716,75 @@ just another round of passive analysis on what's already built.
 same `LBR` sequence again to see which one actually misbehaves in real
 time, the same way `dbg_ram_addr`/`dbg_sc`/`dbg_tpb` already let us
 isolate the previous two bugs.
+
+## 2026-09-15: milestone 3j -- the LBR bug moved after a rebuild; these are routing-dependent hazards, not one fixed bug
+
+Added the four new probes (`tmp_page`, `R_in`, `forceS1`, `extraS1`,
+threaded through `instr.vhd`->`cdp1802.vhd`->`cs1800_cpu.vhd`->
+`cs1800.vhd`->`cs1800_top.vhd`, all with a "no real chip pin, FPGA-only"
+note -- see the commit), rebuilt, reprogrammed, recaptured from the
+same trigger-on-first-TPB start.
+
+Two things happened at once, and untangling them mattered:
+
+- **The `0x00C1` `LBR` bug from milestone 3h/3i is just... gone** in
+  this rebuild -- the `BR` at `0x0098` still correctly reads `0x00B1`
+  (bug from 3g/3h stays fixed) and this time execution sails straight
+  through the `LBR` at `0x00C1` too, matching golden all the way to
+  fetch #120 (`0x00B6`).
+- **A *new*, different single-bit corruption appeared one step later**:
+  golden's next fetch is `0x00B3`; hardware lands at `0x0033` instead --
+  `0x00B3 XOR 0x0033 = 0x80`, bit 7 this time, not bit 6. Confirmed via
+  `tmp_page`/`R_in` in the new probes that this isn't the `LBR`
+  mechanism at all (`R_in` just shows the ordinary `PC+1` value the
+  whole time, consistent with an unrelated, simpler branch/skip a few
+  instructions later).
+
+**This is the real finding**: the exact same, functionally-identical
+RTL (confirmed via `sim/ghdl/run.sh` before rebuilding -- byte-
+identical golden reference, zero behavior change) produced a
+**different specific failure** after nothing but a rebuild (same
+source, new placement/routing, since Vivado isn't guaranteed to place
+identically even for a source-identical design). That's the signature
+of a real, marginal, *routing-dependent* timing hazard, not a fixed
+logic bug living at one address -- consistent with everything found
+today, just confirming it more directly than before. `milestone 3h`'s
+fix (`cpu_data_out`/`io_input_data` structurally gated out of the data
+bus) is a real, confirmed improvement (the bug it targeted stayed
+fixed across this rebuild), but it evidently didn't close every
+instance of this class.
+
+One thing this build *does* rule out for the remaining `ram_data_out_ext
+OR io_data_in_ext` pairing (deliberately left alone in milestone 3h):
+`cs1800_top.vhd` never wires `io_data_in_ext` at all, so for this
+specific design it's a hard-wired constant `X"00"` from `cs1800.vhd`'s
+own port default -- not a live signal, so it structurally cannot be
+the source of a bit glitch here. Whatever's corrupting this new read is
+most likely inside `shared_ram.vhd`'s own async-read combinational
+path (the same general shape -- a live combinational value sampled
+without a hard guarantee it's settled -- as the `cs1800.vhd` bug, just
+in a different file).
+
+**Where this leaves things**: this looks less like "one more bug to
+find" and more like a recurring *class* of hazard (an async/
+combinational value read at a moment real hardware doesn't fully
+guarantee it's settled, invisible to zero-delay GHDL simulation by
+construction) that can surface at different addresses/bits depending
+on how a given build happens to route. Chasing each specific manifestation
+one rebuild at a time, the way milestones 3g-3i did, will keep finding
+*a* bug each time, but may not converge on "done." A more systematic
+option worth considering: making the memory read path (currently
+async/combinational, matching the real 1802's own timing but not
+provably hazard-free once merged onto a shared bus in an FPGA) properly
+registered/synchronous throughout -- noted elsewhere in this project as
+previously attempted and abandoned (see `cs1800_prcx18_memory.vhd`'s
+header: "an earlier real-Block-RAM/wait-state attempt... hit a genuine,
+reproducible CPU-timing corruption") -- so not a quick fix either, but
+possibly the actual way to close this class of bug rather than
+continuing to patch individual instances.
+
+**Next**: user input needed on direction -- keep bisecting this
+specific new `0x00B3`/`0x0033` instance the same way as before, or step
+back and consider the synchronous-memory-path option, or stop here for
+now. Three real, confirmed, hardware-verified bug fixes landed today
+regardless of which way this goes next.
