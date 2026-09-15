@@ -74,7 +74,9 @@ ENTITY cs1800_cpu IS
     dbg_tmp_page : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
     dbg_R_in     : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
     dbg_forceS1  : OUT STD_LOGIC;
-    dbg_extraS1  : OUT STD_LOGIC
+    dbg_extraS1  : OUT STD_LOGIC;
+    dbg_R_A      : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
+    dbg_R_B      : OUT STD_LOGIC_VECTOR(15 DOWNTO 0)
   );
 END cs1800_cpu;
 
@@ -225,7 +227,9 @@ BEGIN
     dbg_tmp_page => dbg_tmp_page,
     dbg_R_in     => dbg_R_in,
     dbg_forceS1  => dbg_forceS1,
-    dbg_extraS1  => dbg_extraS1
+    dbg_extraS1  => dbg_extraS1,
+    dbg_R_A      => dbg_R_A,
+    dbg_R_B      => dbg_R_B
   );
 
 

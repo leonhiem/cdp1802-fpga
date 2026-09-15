@@ -77,6 +77,8 @@ ENTITY cs1800_top IS
     dbg_R_in     : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
     dbg_forceS1  : OUT STD_LOGIC;
     dbg_extraS1  : OUT STD_LOGIC;
+    dbg_R_A      : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
+    dbg_R_B      : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
 
     -- shared_ram Port B: native BRAM-style port for axi_bram_ctrl.
     ram_b_addr : IN  STD_LOGIC_VECTOR(15 DOWNTO 0);
@@ -144,6 +146,8 @@ BEGIN
     dbg_R_in     => dbg_R_in,
     dbg_forceS1  => dbg_forceS1,
     dbg_extraS1  => dbg_extraS1,
+    dbg_R_A      => dbg_R_A,
+    dbg_R_B      => dbg_R_B,
     A_full       => a_full_i
   );
 

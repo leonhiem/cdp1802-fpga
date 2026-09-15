@@ -30,7 +30,18 @@ ENTITY reg_R IS
     mask  : IN  STD_LOGIC_VECTOR(1 DOWNTO 0);
 
     wr    : IN  STD_LOGIC;
-    rd    : IN  STD_LOGIC := '1'
+    rd    : IN  STD_LOGIC := '1';
+
+    -- Exploratory debug taps, 2026-09-15 (see boards/cora-z7-07s/
+    -- BRINGUP_LOG.md's "milestone 3n"): R(A)/R(B) direct, live values
+    -- -- unlike d_out above (which only ever shows whatever register
+    -- the CPU's *own* current instruction happens to be addressing),
+    -- these are unconditional taps into two fixed slots of the
+    -- register file, to watch a specific register's real value across
+    -- many machine cycles regardless of what else is being accessed.
+    -- No real chip pin -- purely additive.
+    dbg_R_A : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
+    dbg_R_B : OUT STD_LOGIC_VECTOR(15 DOWNTO 0)
   );
 END reg_R;
 
@@ -95,5 +106,8 @@ BEGIN
           d_out <= (OTHERS => '0');
       END IF;
   END PROCESS;
+
+  dbg_R_A <= r.reg(10);
+  dbg_R_B <= r.reg(11);
 
 END str;

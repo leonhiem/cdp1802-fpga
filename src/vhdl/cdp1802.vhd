@@ -66,7 +66,9 @@ ENTITY cdp1802 IS
     dbg_tmp_page : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
     dbg_R_in     : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
     dbg_forceS1  : OUT STD_LOGIC;
-    dbg_extraS1  : OUT STD_LOGIC
+    dbg_extraS1  : OUT STD_LOGIC;
+    dbg_R_A      : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
+    dbg_R_B      : OUT STD_LOGIC_VECTOR(15 DOWNTO 0)
   );
 END cdp1802;
 
@@ -396,7 +398,9 @@ BEGIN
     addr  => addr_R,
     mask  => mask_R,
 
-    wr    => wr_R
+    wr    => wr_R,
+    dbg_R_A => dbg_R_A,
+    dbg_R_B => dbg_R_B
   );
 
   p_reg_A : PROCESS(CLOCK, rst, R_out, wr_A)

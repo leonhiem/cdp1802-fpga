@@ -73,6 +73,16 @@ ENTITY cs1800_prcx18_top IS
     dbg_sc       : OUT STD_LOGIC_VECTOR(1 DOWNTO 0);
     dbg_tpb      : OUT STD_LOGIC;
 
+    -- Exploratory debug taps, 2026-09-15 (see cs1800.vhd's own notes
+    -- and BRINGUP_LOG.md's "milestone 3n") -- promoted straight
+    -- through, no behavior change.
+    dbg_tmp_page : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
+    dbg_R_in     : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
+    dbg_forceS1  : OUT STD_LOGIC;
+    dbg_extraS1  : OUT STD_LOGIC;
+    dbg_R_A      : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
+    dbg_R_B      : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
+
     -- cs1800_prcx18_memory Port B: native BRAM-style port for axi_bram_ctrl.
     ram_b_addr : IN  STD_LOGIC_VECTOR(15 DOWNTO 0);
     ram_b_din  : IN  STD_LOGIC_VECTOR(31 DOWNTO 0);
@@ -178,6 +188,12 @@ BEGIN
     dbg_sc       => dbg_sc,
     dbg_tpb      => tpb_i,
     dbg_n        => n_i,
+    dbg_tmp_page => dbg_tmp_page,
+    dbg_R_in     => dbg_R_in,
+    dbg_forceS1  => dbg_forceS1,
+    dbg_extraS1  => dbg_extraS1,
+    dbg_R_A      => dbg_R_A,
+    dbg_R_B      => dbg_R_B,
     ram_data_out_ext => ram_rdata,
     io_data_in_ext   => io_din_i,
     A_full           => a_full_i
