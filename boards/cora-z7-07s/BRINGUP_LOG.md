@@ -1161,3 +1161,93 @@ In priority order:
    only logs every 2000th TPB) to confirm real hardware matches
    simulation all the way to the prompt, not just "the UART eventually
    prints the right text."
+
+## 2026-09-15: MILESTONE -- the real PRCX-18 ROM reaches its actual prompt on real hardware
+
+Added `dbg_R_A`/`dbg_R_B` (unconditional taps into `reg_R.vhd`'s
+register-file slots 10/11) to check whether milestone 3m's suspected
+hang was real register corruption. It wasn't: a properly-synchronized
+from-start capture showed `R(A) = 0x4000` and `R(B)` genuinely,
+correctly incrementing (`0x4005` -> `0x4006` between loop passes,
+exactly `+1` per pass as the disassembly predicts) -- the CPU's own
+execution was entirely correct the whole time. The earlier `0x0003`/
+`0x0004` reading (from `ram_addr`, milestone 3m) was, as suspected,
+just that debug signal's own known TPA-multiplexing display artifact,
+not a real value.
+
+A follow-up snapshot ~2 minutes after run-release showed `R(A)`/`R(B)`
+had moved on entirely (`R(A)=0x0808`, `R(B)=0x0000`, execution spread
+across a wide address range again) -- the sizing loop **had completed
+and the CPU had moved on**, contrary to milestone 3m's "still stuck"
+read of the earlier `trigger_now` snapshots (themselves unreliable for
+the same `ram_addr`-glitch reason established back in milestone 3f).
+Draining the UART at that point produced the real boot banner text --
+`"DDDDDDDDuuuuuuuutttttttt..."` -- immediately recognizable as
+`"Dutch..."` with **every character duplicated exactly 8 times**. Not
+a hang, not corruption: the real message, arriving correctly, just
+repeated.
+
+**Root cause, found and fixed**: `cdp1854` (`u_uart_a` in
+`cs1800_prcx18_top.vhd`) is clocked by `tpb_i` -- one edge per whole
+CDP1802 machine cycle, ~8 real `CLOCK` cycles at this design's 25MHz.
+Its `tx_data_valid` output is therefore a registered signal that
+naturally stays asserted for that *entire* machine cycle. `byte_fifo`
+(clocked by the fast, free-running `CLOCK`, not `tpb_i`) samples
+`push` on every one of those ~8 fast edges with **no edge-detection at
+all**, so it pushed the same byte up to 8 times -- exactly the "held
+level sampled by a faster clock" hazard `p_tx_fifo_pop` already exists
+to avoid on the *pop* side (`ctrl_in(7)`), just never applied to
+*push*. Fixed with the identical edge-detect-into-a-one-cycle-pulse
+pattern, mirrored exactly (`p_tx_fifo_push`).
+
+**Why nothing caught this until now**: `tb_prcx18_lutram.vhd`'s own
+UART capture watches the *raw* `uart_tx_data`/`uart_tx_valid` ports
+with its own external edge-detection (explicitly documented in that
+file's own header, for exactly this reason), bypassing `byte_fifo`
+entirely -- so milestone 3l's simulation success never actually
+exercised this code path at all. The earlier standalone
+`cdp1854_uart_test_top`/`dummy_cpu_driver` hardware test that *did*
+prove `byte_fifo` itself correct (see the "isolating cdp1854+UART"
+milestone) happened to pulse `push` for only one real `CLOCK` cycle,
+not a full CDP1802 machine cycle, so it never exercised this exact
+timing relationship either. Every prior verification was individually
+sound and still missed this -- it only showed up once the *real* CPU,
+the *real* `cdp1854`, and the *real* `byte_fifo` were all connected
+together and driven at real 1802 machine-cycle speed.
+
+**Result, rebuilt and retested on real hardware**:
+
+```
+Dutch 1800 MicroProUsers
+CS1800/PRCX-18    V1.9.0
+
+-SYS-Starting Console Task-
+_08> 
+```
+
+Byte-for-byte matching the golden simulation trace (milestone 3l),
+**on real hardware, no duplication**. This is this project's stated
+goal for this phase: run the real PRCX-18 ROM to its actual prompt on
+real Cora hardware. A trailing
+repeating `0x00`/`0x5E` pair follows the prompt in the capture, most
+likely a normal idle-cursor/heartbeat the OS emits while genuinely
+waiting for keyboard input that was never provided (no real terminal
+is connected yet) -- not yet confirmed, not a concern for this
+milestone.
+
+**What this confirms about today's whole line of work**: the `A_full`
+architecture (bypassing `ADDR`/`TPA`'s external multiplexing
+entirely), the registered Block-RAM read on both ports, and the
+`g_ram_words => 2048` (8KB, the real minimum config) sizing are all
+now verified correct on real silicon, not just in simulation -- the
+three earlier real-hardware bugs fixed today (bug #1/#2 in the LUTRAM
+design, the `cs1800.vhd` OR-merge bug) plus this FIFO push fix are
+the complete set of real hardware-only issues found on the path to
+this result.
+
+**Still open** (see the next-step plan above, largely unchanged):
+XDC timing constraints file, real interrupt/EF2 wiring (needed for
+interactive commands like `DMP`/`TSKL` per the user -- not needed to
+reach the prompt itself), and a proper simulation-side per-TPB dump of
+the real ROM's expected trace for future hardware-vs-simulation
+comparisons.
