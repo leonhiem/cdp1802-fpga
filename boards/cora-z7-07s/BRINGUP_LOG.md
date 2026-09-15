@@ -665,3 +665,54 @@ or something new, is not yet known.
 OR io_data_in_ext` pairing, or a genuinely different mechanism (the
 exact-zero landing address looks more like a real reset than a
 corrupted-but-live read).
+
+## 2026-09-15: milestone 3i -- ruled out the D_in mux and R_in's write path; not a physical timing hazard
+
+Confirmed deterministic first (reran the exact same from-start capture
+a second time on a fresh reprogram: identical divergence, matches for
+126 fetches then lands at `0x0000` both times) -- rules out a random
+setup/hold glitch, points at real sequencing logic instead.
+
+First checked the raw bus reads directly: `0x00C2`->`0x01`,
+`0x00C3`->`0x00` (per `LBR`'s own microcode -- `instr.vhd` around line
+702 -- these are `M(R(P))` and `M(R(P)+1)`, captured into `tmp_page`
+then combined as `r.tmp_page & D_in` on the following `S1` pass).
+**Both bytes read correctly** -- unlike milestone 3g/3h's bug, this
+isn't a corrupted memory read. The final value written into `R(P)`
+(`R0`, since `P=0` throughout this program) is simply wrong: `0x0000`
+instead of the correctly-formed `0x0100`.
+
+Traced the actual write path on the routed checkpoint rather than
+guessing further: `R_in` (`instr.vhd`'s `r.R_in`) is **its own real
+register** (`u_instr/r_reg[R_in][*]`, confirmed via `get_cells`), not
+combinational -- and it feeds `reg_R`'s `D` input almost directly
+(`Logic Levels: 0` in `report_timing`, i.e. one net, no LUTs in
+between). Checked both hold and setup timing on register `0`'s (`R0`,
+i.e. `P`'s target) 16 `D` pins on the routed checkpoint: comfortable
+positive margins throughout (0.2-0.35ns hold, nothing alarming on
+setup). **This specific path is clean** -- ruled out as the cause.
+Also revisited the `D_in_amux`/`D_in_dmux` mux flagged in milestone 3g
+as a "strong candidate": its select (`A_sel_lohi`) turned out to
+already be a registered signal (`r.A_sel_lohi`), not combinational, so
+it doesn't have the "live changing losing input" shape that made
+today's earlier bugs real either -- also ruled out.
+
+Between `tmp_page`'s write (first `S1` pass) and its read (second `S1`
+pass, one full extra pass later -- several real clock cycles apart,
+not a same-cycle race), there's no combinational hazard shape left to
+point at from static timing alone. This one doesn't look like a
+physical timing hazard the way the OR-merge bug did -- it looks like a
+genuine sequencing question (is `extraS1`/`forceS1` actually toggling
+when and how the RTL assumes, on real hardware specifically) that
+static `report_timing` can't answer; it needs to actually *see*
+`tmp_page`/`R_in`/`extraS1`/`forceS1`'s live values during this exact
+instruction, which means adding them as new debug probes (routing them
+out through `instr.vhd`/`cdp1802.vhd`/`cs1800.vhd`'s existing `dbg_*`
+plumbing) and rebuilding -- a real code change for visibility, not
+just another round of passive analysis on what's already built.
+
+**Next**: add `tmp_page`, `R_in`, `extraS1`, `forceS1` (and maybe
+`wr_R`) to the `system_ila` probe set, rebuild, and capture the exact
+same `LBR` sequence again to see which one actually misbehaves in real
+time, the same way `dbg_ram_addr`/`dbg_sc`/`dbg_tpb` already let us
+isolate the previous two bugs.
