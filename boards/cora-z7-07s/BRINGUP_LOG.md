@@ -1003,3 +1003,84 @@ one). Full regression green again (`sim/ghdl/run.sh`,
 `boards/cora-z7-07s/sim/run.sh`), and the local `tb_prcx18_lutram.vhd`
 re-run confirms the real prompt is still reached with this change.
 Rebuilding for real hardware now.
+
+## 2026-09-15: milestone 3m -- real hardware: Block RAM inference succeeds, but a new hang appears in a ROM checksum/RAM-sweep loop
+
+Rebuild succeeded this time -- **Block RAM Tile: 12/50 (24%)**, `LUT
+as Memory` down to 865/6000 (14.4%, from the ~9000/6000 DRC failure),
+setup timing closes with ~9.9ns margin. Programmed, loaded the real
+ROM, released run.
+
+**Not the boot banner**: the UART instead produces a perfectly regular,
+endlessly repeating 16-byte pattern (`@@@@@@@@^^^^^^^^`, `0x40`/`0x5E`
+alternating in blocks of 8). Confirmed via a fresh from-start capture
+(properly reset first this time -- an earlier attempt forgot to
+reassert reset before re-arming the trigger, and caught the CPU
+already mid-execution from a prior run, wrongly suggesting a fetch
+that isn't address `0x0000`) that this is reproducible from the very
+first bytes, not a FIFO-overflow artifact of polling late.
+
+**Isolated the exact loop**: `compare`-style fetch-address tracing
+shows the first ~90 fetches match every earlier-proven trace (`0x0000`
+DIS onward, matching prior LUTRAM-design captures and simulation
+exactly), then the CPU settles into an unbreaking loop across ROM
+addresses `0x3D`-`0x49`:
+
+```
+0040: FB FF     XRI FF
+0042: 5B        STR RB
+0043: F3        XOR
+0044: 3A 4B     BNZ 4B
+0046: 9F        GHI RF
+0047: 5B        STR RB
+0048: 9B        GHI RB
+0049: 3A 3D     BNZ 3D
+```
+
+-- an XOR-based checksum/comparison over a register-indexed pointer
+(`RB`), branching back to `0x3D` unless a match/mismatch condition
+(`BNZ 4B`) is met. Full-trace (not just fetch) inspection shows `RB`'s
+target address genuinely incrementing between loop passes (`0x0003`,
+then `0x0004`, ...) -- this is a real, advancing sweep, not frozen on
+one address -- but it's still executing after many minutes of real
+time, far longer than a full 8KB (let alone the whole ROM) byte-by-byte
+sweep at CDP1802 instruction speeds should ever take (a rough estimate
+puts a full ROM pass at well under a second). Ruled out data
+corruption as the cause: read address `0x0000`'s word directly via the
+independent AXI/Port B path (`devmem 0x40000000`) *while the CPU was
+still stuck in this exact loop* -- `0xBF900071`, byte-exact, matching
+the known-correct ROM content. The memory itself is intact; whatever's
+wrong is in how the CPU's checksum logic is evaluating it, or in
+something this session's new registered-read design does differently
+from `ram.vhd`'s async read under a real, sustained access pattern
+that a short GHDL run wouldn't exercise the same way.
+
+**Leading theory, unconfirmed**: real Block RAM's read-during-write
+collision behavior. Nothing in this design *should* create a same-
+cycle read/write collision in normal operation (Port A's own read and
+write are separate, non-overlapping machine-cycle phases), but this is
+exactly the kind of thing that differs between GHDL's simple signal
+semantics and a real inferred BRAM primitive's actual collision
+policy, and this specific loop (write-attempt-then-immediate-readback-
+style XOR/compare code) is a plausible place for it to matter if it
+does.
+
+**Not yet resolved.** This design's own internal registers (`RB`, the
+actual data being compared) aren't visible on this build's `system_ila`
+(`build_project_prcx18.tcl` never got the `tmp_page`/`R_in`/`forceS1`/
+`extraS1` probes `build_project.tcl` gained in milestone 3i) --
+confirming or ruling out the collision theory, or finding the real
+cause, needs either a disassembly deep-dive into PRCX-18's actual ROM/
+RAM-sizing routine to understand its real termination condition, or
+another rebuild adding real register-level visibility to this specific
+project. Given the length of today's session and that this is a
+distinct, substantial new investigation (not a quick continuation of
+today's earlier fixes), stopping here to check in before committing to
+either path.
+
+**Where this leaves the milestone 3l claim**: PRCX-18 reaching its
+real prompt is confirmed **in simulation only**. Today's three earlier
+real-hardware bugs (3g/3h, the OR-merge fix) remain fixed and verified
+on hardware; the `A_full`/Block-RAM memory redesign itself is new,
+unverified on real silicon beyond "it boots partway and then hits this
+new loop," and should not yet be considered proven there.
