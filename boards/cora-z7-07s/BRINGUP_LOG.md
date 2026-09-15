@@ -368,3 +368,58 @@ instruction register / N-lines, P/X register values) to see what's
 actually preventing `P` from advancing past `0x0090`, or a hand
 bisection of `cs1800_cpu.vhd`'s combinational paths the same way
 `byte_fifo.vhd`'s bug was found.
+
+## 2026-09-15: milestone 3e -- isolated the 0x0090 hang to the rig, not the RTL, via `testram`
+
+Per the user's direction: stopped chasing the real ROM's specific hang
+and went back to the old, boring-on-purpose 276-byte instruction-
+exerciser (`test_program_pkg.vhd`, what the user calls `testram` --
+exercises nearly every opcode, no real function otherwise) to isolate
+step by step, same discipline as every earlier milestone here.
+
+Bisection sequence (each step: reprogram over JTAG -- resets LUTRAM to
+the bitstream's built-in `test_program` default, no ROM loading needed
+-- release reset+run over `devmem`, `capture_ila_prcx18.tcl` with
+`-trigger_now`):
+
+1. **Today's fixed `cs1800_prcx18_top`/`cs1800_prcx18_memory`** (256
+   words): stuck after ~15 TPB pulses, oscillating `0x0000`/`0x0008`/
+   `0x009E` forever.
+2. **Pre-fix `cs1800_prcx18_memory`** (384 words, two separate rom/ram
+   arrays, temporarily restored from commit `4347bb9` to test): stuck
+   even earlier, oscillating `0x0000`/`0x0024`. **Rules out today's two
+   memory-decode fixes as the cause** -- this exact symptom predates
+   them.
+3. **Control: `cs1800_top`+`shared_ram`** (the long-proven design from
+   milestone 2, no ROM/RAM split at all) -- first programmed the
+   bitstream already sitting in `~/fpga/cs1800_bringup`: **also**
+   stuck, oscillating `0x0000`/`0x007A`. Initially alarming, until
+   noticing the `.bit` file's mtime (2026-09-11 17:26) predates the
+   `shared_ram.vhd` fix entirely (`ram.vhd`'s latch-hazard bug, milestone
+   1's own documented failure -- non-deterministic 2-address
+   oscillation is *exactly* that bug's signature) -- a stale build, not
+   a real control.
+4. **Real control: rebuilt `build_project.tcl` from current source**
+   (genuinely has `shared_ram.vhd`) and reprogrammed: **also** stuck,
+   oscillating `0x0000`/`0x0022`/`0x0023`.
+
+Step 4 is the real finding: a design that has been reliably proven
+correct on this exact board across many earlier sessions now fails
+identically. That rules out every VHDL source file tested today --
+`cs1800_prcx18_memory.vhd`, `cs1800_prcx18_top.vhd`, `cs1800_top.vhd`,
+`shared_ram.vhd`, and by extension the shared `cs1800`/`cs1800_cpu`
+core all of them wrap unchanged. The common factor across all four
+bitstreams is this session's rig/environment: many back-to-back JTAG
+reprograms without a board power cycle in between.
+
+Restored the working tree to the committed (fixed) `cs1800_prcx18_top`/
+`cs1800_prcx18_memory`, rebuilt, and reprogrammed the board so it's
+left in the correct state regardless of what caused this.
+
+**Next**: power-cycle the board (not just JTAG-reprogram) and repeat
+the `testram` + `capture_ila_prcx18.tcl` check once more before
+touching any VHDL again -- if a fresh boot fixes it, this was a rig/PS7
+state issue (e.g. AXI interconnect or reset-network state left over
+from repeated reconfiguration) and the original PRCX-18 boot test
+(bug #1/#2 fixes, milestone 3d) needs to be re-run from a clean boot
+before drawing any conclusion about them.
