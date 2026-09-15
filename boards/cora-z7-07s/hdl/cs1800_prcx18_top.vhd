@@ -149,6 +149,9 @@ ARCHITECTURE str OF cs1800_prcx18_top IS
   -- (otherwise-unused) is edge-detected into a one-cycle pop pulse.
   SIGNAL tx_fifo_pop      : STD_LOGIC := '0';
   SIGNAL tx_fifo_pop_prev : STD_LOGIC := '0';
+  -- Edge-detected push pulse -- see p_tx_fifo_push below (milestone 3n).
+  SIGNAL tx_fifo_push      : STD_LOGIC := '0';
+  SIGNAL tx_fifo_push_prev : STD_LOGIC := '0';
 
 BEGIN
 
@@ -268,11 +271,40 @@ BEGIN
     END IF;
   END PROCESS;
 
+  -- Edge-detect uart_a_tx_valid_i into a one-CLOCK-cycle push pulse,
+  -- 2026-09-15 (see boards/cora-z7-07s/BRINGUP_LOG.md's "milestone
+  -- 3n") -- real hardware-only bug found via the real PRCX-18 boot
+  -- banner arriving with every byte duplicated 8 times: cdp1854 is
+  -- clocked by tpb_i (one edge per whole CDP1802 machine cycle, ~8
+  -- real CLOCK cycles -- see u_uart_a below), so its tx_data_valid
+  -- output is a registered signal that naturally stays asserted for
+  -- that entire machine cycle, not a single-CLOCK-wide pulse.
+  -- byte_fifo (clocked by the fast, free-running CLOCK, not tpb_i)
+  -- samples `push` on every one of those ~8 fast edges and pushes
+  -- push_data every single time it's still high -- the exact same
+  -- "held level sampled by a faster clock" hazard `p_tx_fifo_pop`
+  -- above already exists to avoid on the pop side, just never applied
+  -- to push. Simulation never caught this because
+  -- tb_prcx18_lutram.vhd's own UART capture watches the *raw*
+  -- uart_tx_data/valid ports with its own external edge-detection
+  -- (see that file's own header), bypassing this FIFO entirely; the
+  -- earlier standalone `cdp1854_uart_test_top`/`dummy_cpu_driver` test
+  -- that did prove byte_fifo correct on real hardware happened to
+  -- pulse push for only one real CLOCK cycle, not a full CDP1802
+  -- machine cycle, so it never exercised this exact case either.
+  p_tx_fifo_push : PROCESS(CLOCK)
+  BEGIN
+    IF rising_edge(CLOCK) THEN
+      tx_fifo_push_prev <= uart_a_tx_valid_i;
+      tx_fifo_push      <= uart_a_tx_valid_i AND NOT tx_fifo_push_prev;
+    END IF;
+  END PROCESS;
+
   u_tx_fifo : ENTITY work.byte_fifo
   GENERIC MAP ( g_depth_bits => 8 )
   PORT MAP (
     clk       => CLOCK,
-    push      => uart_a_tx_valid_i,
+    push      => tx_fifo_push,
     push_data => uart_a_tx_data_i,
     pop       => tx_fifo_pop,
     head      => uart_tx_fifo_data,
