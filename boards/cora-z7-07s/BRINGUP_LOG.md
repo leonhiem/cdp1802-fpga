@@ -1421,3 +1421,45 @@ script after *every* `program_prcx18.tcl` and after *every* power
 cycle -- the ROM does not persist in either case. Worth building a
 single combined script that does program+load+release in one step, to
 stop this from being re-forgotten.
+
+## 2026-09-16: keystroke injection, second attempt -- conclusive negative result, still open
+
+Tried again with the ILA in the loop, as requested. First attempt: armed
+`system_ila` to trigger on `SC == "11"` (`S3_INTERRUPT`, probe4) to
+directly observe whether injecting a keystroke causes an interrupt.
+**Triggered essentially instantly, every time, regardless of whether a
+keystroke was injected at all** -- the pre-existing LC/50Hz timer
+interrupt (`cs1800_cpu.vhd`'s `nINT_tmp`, unrelated to the UART, has
+worked since long before today) fires roughly every 10-20ms, far too
+often for a single `SC==3` trigger to distinguish "caused by my
+keystroke" from "routine timer tick" -- this does, at least, positively
+confirm the timer-interrupt path itself genuinely works on real
+silicon (`SC` really does reach `S3_INTERRUPT` and return, over and
+over, without the CPU getting stuck).
+
+Switched to a more direct test: held `uart_rx_data`/`uart_rx_available`
+asserted (`'D'`, `0x44`) continuously for a full 10 real seconds --
+spanning several hundred LC ticks -- while continuously draining the
+TX FIFO. **Zero observable reaction**: the output is the exact same
+`^@`/`@` heartbeat pattern the whole time, no echo, no state change, no
+extra bytes. A follow-up longer drain (6000 iterations) after clearing
+the injection also showed no further Console Task restart (`_08>` ->
+`_10>` was a one-time event from the earlier test, not a repeating
+crash loop) -- just the same steady heartbeat, still with the one
+previously-noted odd stray `^` (`0x5E`) without its paired `@`.
+
+**Working theory, not yet confirmed**: this model's `EF2`/`nINT` only
+assert when the CDP1854's `IE` bit is set -- exactly like a real chip
+would also behave (`INT` genuinely requires `IE=1` on real silicon
+too, this isn't a modeling shortcut). `doc/PRCX18_ANALYSIS.md` already
+found the boot-time config write leaves `IE=0`. If PRCX-18's receive
+detection is interrupt/`EF2`-driven and `IE` is never subsequently set
+to 1, holding `DA` high would correctly produce *no* reaction on real
+hardware either -- consistent with what was just observed. Ruling this
+in (or out) needs either: tracing what `R(1)` (the interrupt vector)
+actually gets set to and whether the UART's Control Register is ever
+rewritten with `IE=1` later in boot, or a dedicated ILA probe on `N`/
+`rsel`/`nMWR` to directly watch for `INP4` (status-register read)
+accesses during this idle state, with and without `DA` held -- neither
+done yet. Still an open question, not a blocker for anything achieved
+so far.
