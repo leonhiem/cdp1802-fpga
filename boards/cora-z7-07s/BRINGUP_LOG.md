@@ -1553,3 +1553,53 @@ in the disassembly or capturing across a state transition (e.g. right
 as `DMP` or another command's own read-a-line routine starts) rather
 than this steady-state idle loop.
 
+## 2026-09-16: keystroke injection, fourth attempt -- IE/DA measured directly, definitive
+
+The user raised a fair challenge to the "IE=0" theory above: "if a
+keystroke does not generate an interrupt, that is certainly caused by
+the cdp1854 not receiving that keystroke, otherwise the cdp1854 would
+have activated the interrupt" -- i.e. don't just infer IE=0, check
+whether `cdp1854.vhd` (and its wiring) might simply be failing to
+register the injected byte at all.
+
+Reviewed the whole path end to end first: `build_project_prcx18.tcl`'s
+`u_rx_data_slice`/`u_rx_avail_slice` (correctly sliced bits [7:0]/[8]
+of `axi_gpio_1`'s output) -> `cs1800_prcx18_top`'s `uart_rx_data`/
+`uart_rx_available` ports -> `cdp1854`'s `rx_data`/`rx_data_available`
+-> `status_reg(0)`/`nINT` (both plain combinational assignments, no
+clocked sampling to miss an edge on). No bug found in any of it -- but
+code review alone doesn't *measure* anything, so added direct debug
+taps instead: `cdp1854.vhd` gained `dbg_control_reg`/`dbg_status_reg`
+(same unconditional-tap pattern as `dbg_R_A`/`dbg_R_B`), threaded
+through as `dbg_uart_control`/`dbg_uart_status`, wired into `u_ila_0`
+as probes 15/16.
+
+Rebuilt, reprogrammed, reloaded the ROM, and took two `trigger_now`
+snapshots:
+
+- **Baseline** (no keystroke): `control_reg=0x1B`, `status_reg=0xC0`.
+  `0x1B` = `IE=0` (bit 5 clear), exactly matching
+  `doc/PRCX18_ANALYSIS.md`'s original disassembly finding -- this is
+  now a live, real-hardware measurement of that same value, not just a
+  static-analysis inference.
+- **Held** (`rx_data='D'`, `rx_data_available='1'`):
+  `control_reg=0x1B` (unchanged), `status_reg=0xC1`. Bit 0 (`DA`)
+  flipped from `0` to `1` the instant the keystroke was asserted.
+
+**This settles the question the user raised, definitively**: the
+CDP1854 model *does* correctly receive and register the injected
+keystroke (`DA` flips exactly as it should) -- it is not a reception
+failure, wiring bug, or missed edge anywhere in the path. `IE` is
+independently and directly confirmed `0` at this exact moment, on real
+silicon. Per the real CDP1854 datasheet, `INT` requires `IE=1`
+regardless of `DA` -- so with `IE=0` measured directly, no interrupt
+firing is the datasheet-correct, expected behavior of a real chip in
+this state, not a bug in this model or its wiring.
+
+Still open, same as before: whether PRCX-18 ever sets `IE=1` at some
+other point (e.g. specifically while actively reading a command line),
+which this steady-state idle loop may simply not represent -- worth
+checking by capturing `dbg_uart_control` across a state transition
+(e.g. right as a command's read-a-line routine starts) rather than
+this idle heartbeat.
+
