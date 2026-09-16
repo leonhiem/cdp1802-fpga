@@ -1679,3 +1679,53 @@ GHDL regression re-verified clean) -- `tb_prcx18_lutram_keypress.vhd`
 stays local-only alongside `tb_prcx18_lutram.vhd` for any future
 re-run of this experiment.
 
+## 2026-09-16: actually trying the "DMP" command -- typed right at the prompt, still zero reaction
+
+Explanation (a) above (wrong task/state) is testable directly: type
+the command at the exact moment a real user would, right as the prompt
+first appears, instead of arbitrarily deep into the idle heartbeat.
+New local-only testbench, `tb_prcx18_lutram_dmp.vhd` (copy of
+`tb_prcx18_lutram.vhd`): watches the TX byte stream for the literal
+sequence `"_08> "` (edge-detected shift register compare, same pattern
+as the existing TX capture), and the instant it's seen, types
+`'D'`,`'M'`,`'P'`,`<CR>` one at a time via `uart_rx_data`/
+`uart_rx_available` -- each held 500us, 12.5ms gap between characters
+(comfortably human-typing-speed, and comfortably longer than any
+polling-loop iteration), then keeps running for another ~3.75s
+simulated to catch a delayed reaction or the start of a dump.
+
+Result: **prompt detected at t=2,217,338,375ns (matching the earlier
+runs' timing almost exactly), typing completed by t=2,281,840,625ns,
+full run continued to t=6,031,840,875ns -- total TX output captured:
+96 bytes, exactly the boot banner + `_08> ` prompt, byte-for-byte
+identical to every prior successful boot capture. Nothing else at
+all.** No echo of `D`/`M`/`P` (real serial consoles almost always echo
+typed input -- its complete absence here is itself informative), no
+error message, no dump, no state change of any kind.
+
+This weakens explanation (a) considerably: catching the exact moment
+the prompt appears is about as close to "a real user's first keystroke"
+as a static, non-interactive testbench can get, and it still produced
+nothing. Two explanations remain, now more even in weight: (a) is
+still technically alive if the real read-a-line routine only starts
+polling some number of scheduler ticks *after* the prompt text is
+printed (this testbench typed within ~64,000 cycles / 16ms of the
+prompt appearing -- plausible but not certain to be soon enough); or
+(c), not seriously considered before: this simulation's own post-boot
+behavior (the repeating `"^@"` pattern, and the real-hardware capture's
+observed *second* `-SYS-Starting Console Task-`/`_10>` restart) may
+itself be a symptom of something not-quite-right in this whole
+memory/IO model post-boot, unrelated to the interrupt/polling question
+specifically -- worth keeping in mind rather than continuing to assume
+the boot-to-prompt success automatically means everything downstream
+of it is behaving exactly like the real machine would.
+
+Given the depth of investigation already done here (five separate
+real-hardware and simulation experiments, a full datasheet review, and
+a mechanically-verified execution trace), this is a reasonable point to
+pause this specific thread and let it inform what to try next, rather
+than continuing to guess blindly -- e.g. building a proper interactive
+console bridge (real typed input over SSH, not a fixed-timing scripted
+sequence) so a human can try many timings/commands live, which no
+static testbench timing choice can fully substitute for.
+
