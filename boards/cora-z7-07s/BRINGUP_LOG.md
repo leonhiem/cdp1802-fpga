@@ -1504,3 +1504,52 @@ need re-deriving next time:
   full compare), and an accepted simplification for this bring-up
   milestone (enough real memory for PRCX-18 to boot to its prompt),
   not a limitation of the ported CPU core itself.
+
+## 2026-09-16: keystroke injection, third attempt -- unambiguous now, with LC frozen
+
+Rebuilt with the new `dbg_Q`/`dbg_nEF2`/`dbg_R1` taps and the
+`ctrl_in(5)` LC-freeze bit (previous commit). Real-hardware retest,
+this time with the actual freeze available (`capture_ila_on_interrupt_v2.tcl`):
+
+- **Froze LC** (`ctrl_in=0x48`, LC's own ~10-20ms interrupt confirmed
+  silent -- unlike the earlier `SC=='11'` trigger attempt, which fired
+  almost instantly every single time), armed the ILA on `SC=='11'`,
+  injected a single brief `'D'` pulse. **Did not trigger within 15
+  full seconds.** With LC's noise genuinely eliminated this time, that
+  is now an unambiguous result: no interrupt occurred at all in
+  response to the keystroke, not "possibly masked by timer ticks."
+- **Held `DA` asserted** (LC still frozen) and took a `trigger_now`
+  snapshot of the live signal state: `Q=1`, and -- across the entire
+  4096-sample (~164us) window -- **`nEF2` stayed `1` (inactive) the
+  whole time**, direct, unambiguous confirmation at the signal level
+  (not just "no reaction seen on the TX output") that `EF2` genuinely
+  never asserts while `DA` is held, matching the working theory
+  exactly: this model's `EF2`/`nINT` require the CDP1854's `IE` bit,
+  and `IE` is evidently not set for the receive path during this idle
+  state.
+- **Bonus, unexpected finding**: `R(1)` (probe14) was *not* static in
+  either snapshot -- one read `0xFCD3`, the other actively climbed
+  `0xFCC0` -> `0xFCF6` across that same 164us window. This does **not**
+  mean the interrupt vector is broken or uninitialized -- R(1) only
+  needs to hold a valid ISR address at the *instant* an interrupt is
+  actually taken; between interrupts, 1802 firmware is free to borrow
+  any register (including R1) for ordinary work, as long as the CPU's
+  own interrupt-enable is off during that borrow (matches: LC's own
+  interrupt fires reliably and *does* work correctly elsewhere in this
+  same idle period, per the very first `SC=='11'`-triggers-instantly
+  observation -- R1 evidently holds a real, valid vector at those
+  moments, just not during this particular scratch-work stretch).
+
+**Conclusion for this line of investigation**: PRCX-18 genuinely does
+not react to a UART receive condition during this idle/heartbeat
+state, confirmed now at the signal level (`EF2` never asserts) rather
+than just the previously observed absence of any TX-side reaction.
+Consistent with (not yet certain proof of) `IE` staying `0` for
+receive throughout this state. Still open: whether `IE` ever gets set
+to `1` at some other point (e.g. only once a real command line is
+actively being typed, a state this idle loop may not represent), which
+would need either tracing the actual Control Register writes further
+in the disassembly or capturing across a state transition (e.g. right
+as `DMP` or another command's own read-a-line routine starts) rather
+than this steady-state idle loop.
+
