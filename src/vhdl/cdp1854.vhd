@@ -108,7 +108,19 @@ ENTITY cdp1854 IS
     -- refinement could latch THRE and clear it exactly once per
     -- character written, matching the datasheet's clear-on-write rule,
     -- if the transmit side ever needs real interrupt-driven output.
-    nINT : OUT STD_LOGIC
+    nINT : OUT STD_LOGIC;
+
+    -- Debug taps, 2026-09-16 (see BRINGUP_LOG.md's "keystroke
+    -- injection" entries): direct, unconditional visibility into
+    -- control_reg/status_reg -- specifically to measure IE
+    -- (control_reg(5)) and DA (status_reg(0)) on real hardware
+    -- directly, rather than continuing to infer IE's real value from
+    -- disassembly alone (already flagged inconclusive) or from nINT/
+    -- EF2 staying inactive (consistent with IE=0, but doesn't rule out
+    -- a wiring bug elsewhere -- this settles it directly). No real
+    -- chip pin -- purely additive.
+    dbg_control_reg : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
+    dbg_status_reg  : OUT STD_LOGIC_VECTOR(7 DOWNTO 0)
   );
 END cdp1854;
 
@@ -152,6 +164,9 @@ BEGIN
   END PROCESS;
 
   tx_data_valid <= tx_data_valid_i;
+
+  dbg_control_reg <= control_reg;
+  dbg_status_reg  <= status_reg;
 
   -- IE = control_reg(5) -- see Table 4 in doc/CDP1854_UART.md. DA
   -- only -- see nINT's own port comment above for why THRE is excluded.

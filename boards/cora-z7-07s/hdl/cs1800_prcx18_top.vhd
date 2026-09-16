@@ -97,6 +97,13 @@ ENTITY cs1800_prcx18_top IS
     dbg_nEF2     : OUT STD_LOGIC;
     dbg_R1       : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
 
+    -- Direct cdp1854 control/status register visibility, 2026-09-16 --
+    -- see cdp1854.vhd's own note: settles whether IE (bit 5 of
+    -- dbg_uart_control) is actually set on real hardware, rather than
+    -- continuing to infer it.
+    dbg_uart_control : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
+    dbg_uart_status  : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
+
     -- cs1800_prcx18_memory Port B: native BRAM-style port for axi_bram_ctrl.
     ram_b_addr : IN  STD_LOGIC_VECTOR(15 DOWNTO 0);
     ram_b_din  : IN  STD_LOGIC_VECTOR(31 DOWNTO 0);
@@ -309,7 +316,9 @@ BEGIN
     rx_data_available => uart_rx_available,
     tx_data       => uart_a_tx_data_i,
     tx_data_valid => uart_a_tx_valid_i,
-    nINT          => uart_a_nint_i
+    nINT          => uart_a_nint_i,
+    dbg_control_reg => dbg_uart_control,
+    dbg_status_reg  => dbg_uart_status
   );
 
   -- Raw pass-through, unchanged meaning -- see header comment.
