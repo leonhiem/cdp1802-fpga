@@ -135,7 +135,7 @@ set_property -dict [list CONFIG.NUM_PORTS {2} CONFIG.IN0_WIDTH {8} CONFIG.IN1_WI
 # --- Debug: system_ila on ram_addr/data/nMRD/nMWR/SC/TPB ---
 set u_ila_0 [create_bd_cell -type ip -vlnv xilinx.com:ip:system_ila:1.1 u_ila_0]
 set_property CONFIG.C_MON_TYPE {NATIVE} $u_ila_0
-set_property CONFIG.C_NUM_OF_PROBES {12} $u_ila_0
+set_property CONFIG.C_NUM_OF_PROBES {15} $u_ila_0
 set_property -dict [list \
   CONFIG.C_DATA_DEPTH {4096} \
   CONFIG.C_PROBE0_WIDTH {16} \
@@ -150,6 +150,9 @@ set_property -dict [list \
   CONFIG.C_PROBE9_WIDTH {1} \
   CONFIG.C_PROBE10_WIDTH {16} \
   CONFIG.C_PROBE11_WIDTH {16} \
+  CONFIG.C_PROBE12_WIDTH {1} \
+  CONFIG.C_PROBE13_WIDTH {1} \
+  CONFIG.C_PROBE14_WIDTH {16} \
 ] $u_ila_0
 # probe0=ram_addr probe1=data probe2=nMRD probe3=nMWR probe4=SC probe5=TPB
 # probe6=tmp_page probe7=R_in probe8=forceS1 probe9=extraS1 probe10=R(A)
@@ -157,6 +160,11 @@ set_property -dict [list \
 # chase a real-hardware-only hang in PRCX-18's own ROM checksum/RAM-
 # sizing loop; see cs1800_prcx18_top.vhd's/reg_R.vhd's own notes on
 # these dbg_* ports.
+# probe12=Q probe13=nEF2 probe14=R(1) -- added 2026-09-16 (BRINGUP_LOG.md's
+# "keystroke injection, third attempt", per the user's own request) to
+# directly confirm whether an injected keystroke's DA condition reaches
+# EF2 (gated on Q) and whether the CPU actually takes the interrupt
+# (jumps through R(1), the CDP1802's fixed interrupt-vector register).
 
 # ---------------------------------------------------------------------
 # Connections
@@ -222,6 +230,9 @@ connect_bd_net [get_bd_pins cs1800_prcx18_top_0/dbg_forceS1]  [get_bd_pins u_ila
 connect_bd_net [get_bd_pins cs1800_prcx18_top_0/dbg_extraS1]  [get_bd_pins u_ila_0/probe9]
 connect_bd_net [get_bd_pins cs1800_prcx18_top_0/dbg_R_A]      [get_bd_pins u_ila_0/probe10]
 connect_bd_net [get_bd_pins cs1800_prcx18_top_0/dbg_R_B]      [get_bd_pins u_ila_0/probe11]
+connect_bd_net [get_bd_pins cs1800_prcx18_top_0/dbg_Q]        [get_bd_pins u_ila_0/probe12]
+connect_bd_net [get_bd_pins cs1800_prcx18_top_0/dbg_nEF2]     [get_bd_pins u_ila_0/probe13]
+connect_bd_net [get_bd_pins cs1800_prcx18_top_0/dbg_R1]       [get_bd_pins u_ila_0/probe14]
 
 assign_bd_address -offset 0x41200000 -range 0x00001000 \
   -target_address_space [get_bd_addr_spaces processing_system7_0/Data] \

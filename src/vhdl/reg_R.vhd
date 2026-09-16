@@ -41,7 +41,15 @@ ENTITY reg_R IS
     -- many machine cycles regardless of what else is being accessed.
     -- No real chip pin -- purely additive.
     dbg_R_A : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
-    dbg_R_B : OUT STD_LOGIC_VECTOR(15 DOWNTO 0)
+    dbg_R_B : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
+
+    -- Same idea, 2026-09-16 (see BRINGUP_LOG.md's "keystroke injection"
+    -- entries): R(1) is the CDP1802's fixed interrupt-vector register
+    -- (X<-2, P<-1 on interrupt, so the next fetch comes from R(1)) --
+    -- watching it directly is the most unambiguous way to confirm
+    -- whether the CPU genuinely took an interrupt and jumped through
+    -- it, versus something else entirely.
+    dbg_R1 : OUT STD_LOGIC_VECTOR(15 DOWNTO 0)
   );
 END reg_R;
 
@@ -109,5 +117,6 @@ BEGIN
 
   dbg_R_A <= r.reg(10);
   dbg_R_B <= r.reg(11);
+  dbg_R1  <= r.reg(1);
 
 END str;

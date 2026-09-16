@@ -68,7 +68,8 @@ ENTITY cdp1802 IS
     dbg_forceS1  : OUT STD_LOGIC;
     dbg_extraS1  : OUT STD_LOGIC;
     dbg_R_A      : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
-    dbg_R_B      : OUT STD_LOGIC_VECTOR(15 DOWNTO 0)
+    dbg_R_B      : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
+    dbg_R1       : OUT STD_LOGIC_VECTOR(15 DOWNTO 0)
   );
 END cdp1802;
 
@@ -400,6 +401,7 @@ BEGIN
 
     wr    => wr_R,
     dbg_R_A => dbg_R_A,
+    dbg_R1  => dbg_R1,
     dbg_R_B => dbg_R_B
   );
 

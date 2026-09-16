@@ -83,6 +83,20 @@ ENTITY cs1800_prcx18_top IS
     dbg_R_A      : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
     dbg_R_B      : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
 
+    -- Added 2026-09-16 (see BRINGUP_LOG.md's "keystroke injection,
+    -- third attempt"): Q and EF2 weren't visible to the ILA at all
+    -- before (Q was purely an internal signal here; EF2 only existed
+    -- as nEF_i(1), also internal) -- both needed to directly confirm
+    -- whether an injected keystroke's DA condition ever reaches EF2
+    -- (gated on Q, per the SIO board schematic) and whether the CPU
+    -- actually takes the interrupt (see dbg_R1 below). No real chip
+    -- pin beyond Q itself -- EF2 is a backplane signal but this taps
+    -- it before the board-level inversion, same convention as nEF
+    -- elsewhere in this codebase (asserted = '0').
+    dbg_Q        : OUT STD_LOGIC;
+    dbg_nEF2     : OUT STD_LOGIC;
+    dbg_R1       : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
+
     -- cs1800_prcx18_memory Port B: native BRAM-style port for axi_bram_ctrl.
     ram_b_addr : IN  STD_LOGIC_VECTOR(15 DOWNTO 0);
     ram_b_din  : IN  STD_LOGIC_VECTOR(31 DOWNTO 0);
@@ -112,6 +126,7 @@ ARCHITECTURE str OF cs1800_prcx18_top IS
 
   SIGNAL lc     : STD_LOGIC := '0';
   SIGNAL lc_cnt : UNSIGNED(31 DOWNTO 0) := (OTHERS => '0');
+  SIGNAL lc_run : STD_LOGIC; -- see p_lc_gen below
   SIGNAL Q      : STD_LOGIC;
 
   SIGNAL ram_addr  : STD_LOGIC_VECTOR(15 DOWNTO 0);
@@ -169,17 +184,30 @@ ARCHITECTURE str OF cs1800_prcx18_top IS
 BEGIN
 
   -- Free-running LC divider: see cs1800_top.vhd, unchanged idiom.
+  -- ctrl_in(5) freeze added 2026-09-16 (see BRINGUP_LOG.md's "keystroke
+  -- injection, third attempt" -- the user's own suggestion): the
+  -- pre-existing LC/50Hz timer interrupt fires every 10-20ms,
+  -- swamping any attempt to isolate a UART-receive-driven interrupt on
+  -- the ILA. ctrl_in(5) was already unused for its own logic here
+  -- (EF2 is computed live now, not from ctrl_in(5) -- see nEF_i(1)
+  -- below), so it's repurposed as an LC-freeze bit. Polarity chosen so
+  -- the existing "0x68" convention used throughout this project's
+  -- tooling (ctrl_in(5)='1') is UNCHANGED -- LC free-runs normally
+  -- unless a test deliberately clears bit 5 (e.g. ctrl_in=0x48).
   p_lc_gen : PROCESS(CLOCK)
   BEGIN
     IF rising_edge(CLOCK) THEN
-      IF lc_cnt = to_unsigned(g_lc_half_period - 1, lc_cnt'length) THEN
-        lc_cnt <= (OTHERS => '0');
-        lc     <= NOT lc;
-      ELSE
-        lc_cnt <= lc_cnt + 1;
+      IF lc_run = '1' THEN
+        IF lc_cnt = to_unsigned(g_lc_half_period - 1, lc_cnt'length) THEN
+          lc_cnt <= (OTHERS => '0');
+          lc     <= NOT lc;
+        ELSE
+          lc_cnt <= lc_cnt + 1;
+        END IF;
       END IF;
     END IF;
   END PROCESS;
+  lc_run <= ctrl_in(5); -- '1' = normal (matches existing "0x68"), '0' = freeze LC for debug
 
   sel1_n <= '0' WHEN n_i = "001" ELSE '1';
   sel4_n <= '0' WHEN (n_i = "100" AND Q = '1') ELSE '1';
@@ -218,11 +246,15 @@ BEGIN
     dbg_extraS1  => dbg_extraS1,
     dbg_R_A      => dbg_R_A,
     dbg_R_B      => dbg_R_B,
+    dbg_R1       => dbg_R1,
     ram_data_out_ext => ram_rdata,
     io_data_in_ext   => io_din_i,
     A_full           => a_full_i
     -- dbg_tpa/mem_wait left unconnected (default '0') -- not used here.
   );
+
+  dbg_Q    <= Q;
+  dbg_nEF2 <= nEF_i(1);
 
   dbg_ram_addr <= ram_addr;
   dbg_data     <= ram_wdata;
