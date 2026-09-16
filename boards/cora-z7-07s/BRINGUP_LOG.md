@@ -1328,3 +1328,96 @@ this wiring, then try injecting a character via `uart_rx_data`/
 `uart_rx_available` over devmem while the OS is sitting at its prompt,
 and watch (via ILA or the TX FIFO) whether it's consumed at all --
 the empirical test that the disassembly alone couldn't settle.
+
+## 2026-09-15/16: real hardware test of the interrupt wiring -- a real regression, then two false leads, then a testing-procedure gap
+
+Built and programmed the interrupt-wiring commit above. **Real
+hardware regression found immediately**: TX FIFO stayed empty forever
+(`drain_uart_fifo.sh` never saw a byte, even after 8+ seconds). Root
+cause, confirmed by ILA capture (`capture_ila_from_start.tcl`): `SC`
+never showed `S3_INTERRUPT` (ruling out a runaway interrupt-take
+loop), but `ram_addr` crawled forward only ~7 bytes in 5 real seconds
+around address `0x00E5`-`0x00EC` -- a region the real ROM's own
+disassembly shows is a long run of `IDL` (`0x00`) bytes. Theorized
+cause: `cdp1854.vhd`'s `nINT` gated on `IE AND (DA OR THRE)`, and
+`THRE` is hardwired `'1'` in this simplified model (no real
+transmitter-busy state) -- the ROM's own boot-time device-clear sweep
+(`doc/PRCX18_ANALYSIS.md`) writes uninitialized RAM garbage to every
+I/O port including this UART's Control Register, and if that garbage
+byte happens to set `IE=1`, the always-true `THRE` term asserts `nINT`
+permanently with nothing able to ever clear it, storming the CPU with
+interrupts. Fixed by gating `nINT` on `DA` only (see the fix commit's
+own message) -- verified again in GHDL simulation (full regression +
+`tb_prcx18_lutram.vhd`, byte-for-byte identical).
+
+**Rebuilt and retested -- same exact hang, unchanged.** This
+immediately falsified the `THRE` theory (removing it from the gate
+condition should have made this scenario, where `rx_data_available`
+is never asserted, behave identically to `nINT` being permanently
+inactive -- i.e. identical to before any interrupt wiring at all).
+
+**Disciplined A/B bisection** (per this project's standing practice):
+built and tested `4930d1d` (the commit *before any interrupt wiring
+existed at all*) with the exact same test procedure. **Also hung at
+the same address.** This conclusively ruled out every RTL change made
+today -- the bug, whatever it was, predated all of it.
+
+Suspected the documented [[cora-jtag-reprogram-wedge]] pitfall (many
+back-to-back JTAG reprograms without a power cycle) -- four reprograms
+had happened in a row by this point. User power-cycled the board.
+**Reprogrammed and retested -- same exact hang, unchanged, even after
+a genuine power cycle.** This ruled out the JTAG-wedge theory too.
+
+**Actual root cause**: a testing-procedure gap, not a hardware or RTL
+bug at all. `cs1800_prcx18_top`'s ROM+RAM (`cs1800_prcx18_memory.vhd`)
+is real Block RAM loaded via `axi_bram_ctrl_0`'s Port B *at runtime*,
+not embedded in the bitstream (see `gen_load_prcx18_rom.py`'s own
+header) -- a fresh bitstream program (or a power cycle) leaves that
+RAM blank. Every test this session went straight from `program_prcx18.tcl`
+to releasing reset/run over devmem, **never re-running
+`gen_load_prcx18_rom.py`'s generated load script first** -- so the
+CPU was executing an entirely blank ROM the whole time. A ROM that's
+all zero bytes disassembles as an unbroken run of `IDL` (`0x00`)
+instructions, which is *exactly* the "crawls forward a few bytes per
+several seconds" signature observed (each LC/50Hz timer interrupt
+nudges execution by roughly one `IDL` per real-time tick) -- not a
+CPU-core bug, not an interrupt-storm, not a JTAG-wedge, just a blank
+memory that happens to look like a specific, oddly-plausible failure
+mode.
+
+Re-ran `gen_load_prcx18_rom.py`'s generated load-and-release script
+(loads the real 8KB ROM word-by-word into Port B via `busybox devmem`,
+*then* releases reset+run) against the fixed interrupt-wiring
+bitstream: **boot succeeded immediately**, byte-for-byte identical to
+the established milestone (`Dutch 1800 MicroProUsers` / `CS1800/PRCX-18
+V1.9.0` / `-SYS-Starting Console Task-` / `_08>`). Confirms the
+interrupt/EF2 wiring is correct and harmless on real silicon, same as
+already proven in simulation.
+
+**Bonus finding, previously undocumented and matching a much earlier
+prediction**: after `_08>`, draining further shows a repeating `^@`
+(`0x5E 0x40`) pattern, then a *second* `-SYS-Starting Console
+Task-`/`_10>` sequence, then more `^@` repeats -- the Console Task
+legitimately restarting under a new task ID and idling again. This
+matches the "trailing `0x00`/`0x5E` pair... likely a normal
+idle-cursor/heartbeat" note from the original milestone entry exactly
+-- confirmed here, not a bug.
+
+**Keystroke injection, first attempt, inconclusive**: wrote `'D'`
+(`0x44`) with `rx_available=1` then cleared it via `axi_gpio_1`
+(`0x41210000`) while the console was idling in the `^@` heartbeat --
+no visible change in the output stream (heartbeat continued
+unchanged, no echo, no reaction). Doesn't yet distinguish between
+"PRCX-18 isn't polling/interested in RX during this exact idle state"
+and "the injection itself didn't work" -- needs a follow-up test
+watching the UART's actual status/interrupt lines via ILA during
+injection, not just the TX output, before drawing any conclusion.
+Still open, same as the disassembly's own inconclusive verdict on
+whether PRCX-18 uses interrupts at all.
+
+**Process lesson, now load-bearing**: any future real-hardware test of
+`cs1800_prcx18_top` MUST re-run `gen_load_prcx18_rom.py`'s generated
+script after *every* `program_prcx18.tcl` and after *every* power
+cycle -- the ROM does not persist in either case. Worth building a
+single combined script that does program+load+release in one step, to
+stop this from being re-forgotten.
