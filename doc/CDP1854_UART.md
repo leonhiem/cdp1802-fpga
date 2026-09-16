@@ -122,6 +122,24 @@ polls the UART's status bits directly via the `PE/OE`, `FE`, `THRE`,
 exactly this: those four status pins wired straight to spare `EF`
 inputs for a polled, non-interrupt system.)
 
+**`MODE` does not affect any of this** (checked directly against the
+datasheet, 2026-09-16): `MODE` only selects the bus *wiring* style
+(Mode 1 = zero-glue-logic CDP1800-bus connection, which is what the
+CS1800 uses; Mode 0 = a separate `CRL`/`THRL`/`MR`/`DAR` pulse
+interface for generic UART use) -- `IE` is always a plain,
+software-controlled Control Register bit in either mode, per Table 1's
+own Note 1. In fact the datasheet's own *recommended* Mode 1 reference
+circuit (Figure 2) is explicitly captioned "NON-INTERRUPT DRIVEN
+SYSTEM" and wires `INT`/`THRE`/`DA`/`FE` straight to spare `EF` inputs
+rather than the CPU's real interrupt line -- a polling-only design is
+the manufacturer's own suggested Mode-1 usage, not an unusual choice.
+Confirmed directly on the real PRCX-18 ROM (both a live real-hardware
+register readout and a full-execution GHDL trace, including a
+keystroke held through the idle state): `IE` is written to `0` exactly
+once during boot and never changed -- see
+`boards/cora-z7-07s/BRINGUP_LOG.md`'s "keystroke injection" entries for
+the full investigation.
+
 ## Clocking
 
 Both `RCLOCK` (pin 17) and `TCLOCK` (pin 40) need an external clock at

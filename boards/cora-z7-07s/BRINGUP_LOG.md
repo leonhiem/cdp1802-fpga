@@ -1603,3 +1603,79 @@ checking by capturing `dbg_uart_control` across a state transition
 (e.g. right as a command's read-a-line routine starts) rather than
 this idle heartbeat.
 
+## 2026-09-16: keystroke injection, fifth attempt -- mechanically verified across the whole run: IE is written exactly once, ever
+
+The user asked directly (having checked the real datasheet themselves):
+does the CDP1854's `MODE=1` (CDP1800-bus-compatible interface) imply
+interrupts are "standard enabled"? Fetched the actual Intersil
+datasheet (the cached copy's host had an expired TLS cert; re-fetched
+directly) to check. Answer: **no** -- `MODE` only selects the bus
+*wiring* style (Mode 1 = zero-glue-logic CDP1800-bus connection;
+Mode 0 = separate `CRL`/`THRL`/`MR`/`DAR` pulse interface for generic
+UART use), completely orthogonal to interrupts. Table 1's own Note 1,
+which sits in the Mode-1 section of the datasheet, is unconditional:
+"Interrupts will occur only after the IE bit in the Control Register
+... has been set." Even more telling: the datasheet's own *recommended*
+Mode-1 reference circuit (Figure 2) is explicitly captioned
+"NON-INTERRUPT DRIVEN SYSTEM" -- it wires `INT`/`THRE`/`DA`/`FE`
+straight to spare `EF` flag inputs for direct polling, not to the
+CPU's real interrupt line at all. `IE=0` is not an oddity; it matches
+the chip manufacturer's own suggested non-interrupt usage pattern.
+
+Rather than keep fighting the disassembly's `SEP`/`DIS`/`RET`-inline-
+immediate desync issue (hit yet again trying to manually trace the
+`0x1000`+ region -- a `DIS`/`OUT`/`RET` sequence where `X=P=3` makes
+several bytes double as inline immediate data, not real opcodes,
+exactly as `doc/PRCX18_ANALYSIS.md` already warned), instrumented the
+*simulation* instead: added a temporary `REPORT` statement to
+`cdp1854.vhd`'s `p_write` process, logging every real Control Register
+write with its value and simulation time -- sidesteps disassembly
+ambiguity entirely since it's watching actual execution, not guessing
+at it.
+
+Two runs against the real ROM, both through `tb_prcx18_lutram.vhd`
+(the actual hardware-accurate `A_full`/Block-RAM design):
+
+1. **Passive boot-only run** (existing testbench, unmodified): across
+   the *entire* ~5,000,000ns / ~20,000,000-cycle run -- well past
+   reaching the `_08>` prompt and settling into the idle heartbeat --
+   the Control Register is written **exactly once**, `0x1B`
+   (`IE=0`), at t=2,178,780,125ns. Never touched again. This directly
+   falsifies `doc/PRCX18_ANALYSIS.md`'s old "presumably sets TR=1...
+   a second write, not yet located" theory -- there is no second
+   write, at least not within this window.
+2. **Keystroke-injected run** (new local-only
+   `tb_prcx18_lutram_keypress.vhd`, copy of `tb_prcx18_lutram.vhd`
+   with `uart_rx_data`/`uart_rx_available` stimulus added): same
+   single `0x1B` write at the same boot-time moment, then injected
+   `'D'` with `rx_data_available` held for 100,000 CLOCK cycles
+   (25ms simulated) at cycle 12,000,000 -- comfortably inside the idle
+   heartbeat. **No new Control Register write occurred at any point
+   during the hold, or afterward, for the rest of the ~20,000,000-cycle
+   run.** TX output stayed exactly the boot banner -- no echo, no
+   reaction, nothing.
+
+**This is now a mechanically verified fact, not an inference**: across
+the CPU's real, full execution -- boot, prompt, idle heartbeat, and a
+sustained keystroke held right through that idle state -- `IE` is
+written to `0` exactly once and never changed. Combined with the
+datasheet findings above, the conclusion is: **if PRCX-18 ever reads
+keystrokes at all, it has to be via polling the Status Register's `DA`
+bit (`INP4`, checking bit 0) -- not via CDP1802 hardware interrupts**,
+since interrupts categorically cannot fire with `IE=0`, and nothing in
+this ROM's actual execution ever sets it otherwise.
+
+The remaining open question sharpens rather than closes: even *polling*
+produced no reaction to a keystroke held for the entire idle-heartbeat
+duration. Two explanations remain live: (a) this specific idle
+"`^@`" heartbeat loop is a different task from whatever routine
+actually reads a command line in this multitasking OS, and simply
+never touches the UART's Status Register at all while it's running --
+most likely, given nothing reacted even to a very long, clean hold; or
+(b) the real read-a-line routine polls something other than `INP4`'s
+`DA` bit. Reverted the temporary `cdp1854.vhd` instrumentation after
+this investigation (confirmed `git diff` shows zero remaining changes,
+GHDL regression re-verified clean) -- `tb_prcx18_lutram_keypress.vhd`
+stays local-only alongside `tb_prcx18_lutram.vhd` for any future
+re-run of this experiment.
+
