@@ -78,6 +78,46 @@
 --   (unchanged) -- axi_bram_ctrl already tolerates that today, and
 --   this fix only ever targeted Port A's real-time hazard.
 --
+--   Why Port B is 32-bit/14-bit while the CDP1802 itself is 8-bit/
+--   16-bit (question asked directly while reviewing this in the
+--   Vivado GUI, 2026-09-16): Port A and Port B are two genuinely
+--   different-width ports on the same dual-port Block RAM (a real,
+--   supported primitive feature -- the underlying array is just N
+--   total bits, and each port independently picks how many bits per
+--   address it exposes). Port A matches the CDP1802 exactly (8-bit
+--   data, and -- via A_full, see above -- the CPU's real, full 16-bit
+--   address, completely unrestricted). Port B is a second, separate
+--   interface that exists ONLY so Linux can bulk-load the ROM image
+--   over AXI (which is natively 32-bit on this Zynq part) -- 32-bit
+--   words let gen_load_prcx18_rom.py write 4 ROM bytes per `devmem`
+--   call instead of 1, a genuine 4x speedup, not incidental. Its
+--   14-bit address is simply g_ram_words+ROM's actual combined size
+--   (8KB+8KB=16KB) expressed as a BYTE address (2^14=16384, matching
+--   build_project_prcx18.tcl's own `-range 0x00004000`) -- `ram_b_addr`
+--   is still declared a full 16 bits for generality, but only the
+--   lower 14 are ever wired to real memory (Vivado's own build log
+--   already flags this, benignly: "Width mismatch...ram_b_addr(16) to
+--   bram_addr_a(14) -- only lower order bits will be connected").
+--
+--   The CPU's own 64KB address space is real and NEVER reduced by any
+--   of this -- but this module's own decode is intentionally minimal,
+--   not a full 16-bit compare (see eff_is_rom/a_is_rom below): only
+--   bits 15:13 are checked, and only to pick ROM (`a_address(15
+--   downto 13)="000"`, the bottom 8KB) vs "everything else" (RAM,
+--   indexed by just `a_address(12 downto 2)`, 11 bits). That means any
+--   address with bits 15:13 not all zero -- 0x2000, 0x4000, 0x8000,
+--   0xC000, etc. -- all alias onto the exact same physical 8KB RAM
+--   array, not eight distinct 8KB banks. The CPU can genuinely drive
+--   any of its 65536 addresses and always gets *something* back (ROM
+--   or that one RAM bank); it just doesn't distinguish most of that
+--   space into separate real memory. This matches real vintage
+--   hardware practice (a handful of high address bits decoded, not a
+--   full compare) and was an accepted simplification for this
+--   bring-up milestone -- enough real, distinctly-addressed memory
+--   (8KB ROM + 8KB RAM) for PRCX-18 to boot to its console prompt, not
+--   a claim that the other ~48KB of the CPU's address space is
+--   somehow unavailable to it.
+--
 -------------------------------------------------------------------------------
 
 LIBRARY IEEE;
@@ -183,6 +223,13 @@ ARCHITECTURE str OF cs1800_prcx18_memory IS
 
 BEGIN
 
+  -- Minimal 2-region decode, not a full 16-bit compare -- see this
+  -- file's header ("Why Port B is 32-bit/14-bit...") for the full
+  -- explanation: bits 15:13="000" is the bottom 8KB (ROM), anything
+  -- else is RAM, indexed by bits 12:2 alone -- so 0x2000/0x4000/0x8000/
+  -- 0xC000/etc. all alias onto the same physical 8KB RAM, not distinct
+  -- banks. The CPU's own 64KB address space is unrestricted; only this
+  -- module's decode is intentionally this minimal.
   eff_addr    <= b_addr WHEN sel_ext = '1' ELSE a_address;
   eff_is_rom  <= '1' WHEN eff_addr(15 DOWNTO 13) = "000" ELSE '0';
   eff_rom_idx <= to_integer(unsigned(eff_addr(12 DOWNTO 2)));
