@@ -1729,3 +1729,39 @@ console bridge (real typed input over SSH, not a fixed-timing scripted
 sequence) so a human can try many timings/commands live, which no
 static testbench timing choice can fully substitute for.
 
+## 2026-09-16: interactive console bridge -- built, mechanically verified
+
+Built `interactive_console.sh`: run directly on the board (avoids the
+~100-300ms-per-command SSH round-trip latency a host-side per-keystroke
+bridge would add), it puts the session's own tty into raw/no-echo mode,
+backgrounds a tight unslept loop draining `cs1800_prcx18_top`'s TX FIFO
+and printing each byte live, and reads stdin one raw byte at a time in
+the foreground, writing each straight into `uart_rx_data`/
+`uart_rx_available` via `devmem` -- a real, live terminal session
+against the actual CPU, in place of any more scripted-timing guesses.
+
+Mechanically verified end to end (a Python pty-based harness, mimicking
+a real interactive SSH terminal session): connected, immediately
+started streaming the board's real, live UART output (mid-`"^@"` idle
+heartbeat at the moment of connection), sent a synthetic keystroke with
+no hang or crash, and Ctrl-C cleanly triggered the script's own
+cleanup trap (tty restored, background drain loop killed). Confirmed
+the board is left in an undisturbed, normal-running state afterward
+(`ctrl_in` still `0x68`, no leftover processes).
+
+**Bonus, unplanned finding from this live capture**: watched the
+Console Task restart (`"-SYS-Starting C..."`) a *second* time in real
+time, independent of any earlier test's specific timing -- confirms
+this is a genuinely repeating behavior of the real hardware/ROM in
+this idle state, not a one-off artifact of a particular test's exact
+reset-release timing. Worth investigating on its own terms at some
+point (why does the Console Task keep restarting at all?), separate
+from the interrupt/polling question.
+
+Usage: `ssh` into the board (see `cs1800-board-ssh-access` in the
+project's own memory for the access details -- never commit those),
+then `sh /tmp/interactive_console.sh` (re-copy it there first if the
+board has power-cycled since -- see the ramdisk note above). Pass
+`0x48` instead of the default `0x68` as an argument to also freeze LC
+for an interrupt-noise-free session.
+
