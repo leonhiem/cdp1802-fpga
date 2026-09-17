@@ -167,3 +167,53 @@ try commands (`dmp`, `tskl`, ...) against the simulation the way the
 user already has on real hardware, or move toward the Cora Z7-07S
 hardware bring-up path now that the simulation-side milestone is
 solid.
+
+## Address 11 is a general-purpose reset/preset latch, not UART-RSEL-dedicated
+
+Per the user's own SIO board schematic review (2026-09-16/17): address
+`11` (`N=1`, `Q=1`) selects a CD4076 latch whose bit 1 drives the
+CDP1854's `RSEL` pin directly -- but the latch is general-purpose (its
+other bits almost certainly drive unrelated reset/preset lines
+elsewhere on the board), so not every `OUT 1` in the ROM is really
+about the UART. This directly informed a real hardware/simulation bug
+fix: this model's `sel1_n` decode was missing the `Q=1` qualifier that
+address 14's decode already correctly had (see
+`boards/cora-z7-07s/BRINGUP_LOG.md`'s "real SIO-board correction"
+entry) -- during the boot-time device-clear sweep above (which
+explicitly runs with `Q=0`), the model was incorrectly capturing that
+sweep's `OUT 1` as a real RSEL-latch write; real hardware would ignore
+it.
+
+Every `OUT 1`/`OUT 4` occurrence in the full 8192-byte ROM (a full
+pass -- earlier passes in this project missed the tail end past
+roughly `0x1B64` due to the disassembler's own instruction-count
+limit), classified by adjacency:
+
+```
+000A: OUT 1   (isolated -- next OUT4 is 6 bytes away at 0010, part of
+0010: OUT 4    the boot-time N=1..7 device-clear sweep above, not a
+               real RSEL pairing)
+0023: OUT 1   -- isolated, likely general reset/preset
+03BD: OUT 1   -- isolated (in a SEP-dispatch region -- exact address
+               uncertain, see the disassembly-desync note above)
+03CD: OUT 1   -- isolated (same caveat)
+0A70: OUT 1   -- isolated
+0AE2: OUT 1   -- isolated
+0FA8: OUT 1   \_ paired (2 bytes apart) -- a real RSEL+access sequence
+0FAA: OUT 4   /
+0FAC: OUT 1   \_ paired (2 bytes apart) -- a second RSEL+access
+0FAE: OUT 4   /  sequence, right after the first
+1057: OUT 4   -- isolated
+10C7: OUT 4   -- isolated
+1481: OUT 1   -- isolated
+1E66: OUT 1   \_ paired (1 byte apart!) -- a real RSEL+access sequence
+1E67: OUT 4   /
+1E71: OUT 4   -- isolated (10 bytes after the pair above)
+```
+
+Three tightly-adjacent `OUT1`->`OUT4` pairs (`0x0FA8`/`0x0FAA`,
+`0x0FAC`/`0x0FAE`, `0x1E66`/`0x1E67`) look like genuine
+RSEL-then-register-access sequences; the rest are isolated `OUT 1`s or
+`OUT 4`s, consistent with address 11 being a general-purpose
+reset/preset line most of the time, not a dedicated per-access RSEL
+toggle.
