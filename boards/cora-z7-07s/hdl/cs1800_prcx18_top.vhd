@@ -151,7 +151,7 @@ ARCHITECTURE str OF cs1800_prcx18_top IS
   SIGNAL tpb_i  : STD_LOGIC;
   SIGNAL io_din_i : STD_LOGIC_VECTOR(7 DOWNTO 0);
 
-  SIGNAL sel1_n : STD_LOGIC; -- N=1, active low
+  SIGNAL sel1_n : STD_LOGIC; -- N=1 and Q='1', active low
   SIGNAL sel4_n : STD_LOGIC; -- N=4 and Q='1', active low
   SIGNAL io_sel_reg : STD_LOGIC_VECTOR(7 DOWNTO 0);
   SIGNAL uart_a_nsel : STD_LOGIC;
@@ -216,7 +216,15 @@ BEGIN
   END PROCESS;
   lc_run <= ctrl_in(5); -- '1' = normal (matches existing "0x68"), '0' = freeze LC for debug
 
-  sel1_n <= '0' WHEN n_i = "001" ELSE '1';
+  -- Real SIO board schematic, confirmed by the user 2026-09-16/17:
+  -- address 11 (N=1, Q=1) selects a CD4076 latch whose bit 1 drives
+  -- the CDP1854's RSEL pin directly -- this decode needs Q=1 too,
+  -- exactly like sel4_n already requires for address 14. Previously
+  -- missing here: during the boot-time device-clear sweep (which
+  -- explicitly sets Q=0 -- see doc/PRCX18_ANALYSIS.md -- before
+  -- sweeping OUT1..7), this model incorrectly captured that as a real
+  -- write to the RSEL latch; real hardware would have ignored it.
+  sel1_n <= '0' WHEN (n_i = "001" AND Q = '1') ELSE '1';
   sel4_n <= '0' WHEN (n_i = "100" AND Q = '1') ELSE '1';
   uart_a_nsel <= '0' WHEN (sel4_n = '0' AND io_sel_reg(2) = '0') ELSE '1';
   io_din_i <= uart_a_dout;

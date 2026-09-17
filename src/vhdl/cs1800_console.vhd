@@ -91,7 +91,7 @@ ARCHITECTURE str OF cs1800_console IS
   SIGNAL ram_dout_i : STD_LOGIC_VECTOR(7 DOWNTO 0);
   SIGNAL io_din_i    : STD_LOGIC_VECTOR(7 DOWNTO 0);
 
-  SIGNAL sel1_n : STD_LOGIC; -- N=1, active low
+  SIGNAL sel1_n : STD_LOGIC; -- N=1 and Q='1', active low
   SIGNAL sel4_n : STD_LOGIC; -- N=4 and Q='1', active low
   SIGNAL io_sel_reg : STD_LOGIC_VECTOR(7 DOWNTO 0);
   SIGNAL uart_a_nsel : STD_LOGIC;
@@ -114,7 +114,15 @@ BEGIN
 
   Q <= q_i;
 
-  sel1_n <= '0' WHEN n_i = "001" ELSE '1';
+  -- Real SIO board schematic, confirmed by the user 2026-09-16/17:
+  -- address 11 (N=1, Q=1) selects a CD4076 latch whose bit 1 drives
+  -- the CDP1854's RSEL pin directly -- this decode needs Q=1 too,
+  -- exactly like sel4_n already requires for address 14. Previously
+  -- missing here: during the boot-time device-clear sweep (which
+  -- explicitly sets Q=0 -- see doc/PRCX18_ANALYSIS.md -- before
+  -- sweeping OUT1..7), this model incorrectly captured that as a real
+  -- write to the RSEL latch; real hardware would have ignored it.
+  sel1_n <= '0' WHEN (n_i = "001" AND q_i = '1') ELSE '1';
   sel4_n <= '0' WHEN (n_i = "100" AND q_i = '1') ELSE '1';
 
   -- EF1/EF3 pass straight through from the testbench; EF2 is now live,

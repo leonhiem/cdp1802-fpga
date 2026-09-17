@@ -1765,3 +1765,54 @@ board has power-cycled since -- see the ramdisk note above). Pass
 `0x48` instead of the default `0x68` as an argument to also freeze LC
 for an interrupt-noise-free session.
 
+**Real human live-typing result**: the user tried it -- streaming
+`"^@"` heartbeat exactly as expected, and no reaction to any typed
+character, including Enter, at real human reaction-time. This is now
+the strongest negative result yet: real hardware, real human, real
+time, still nothing. Raised a new theory worth taking seriously: the
+repeating `-SYS-Starting Console Task-` restarts may not be "idling
+normally, waiting for input" at all -- they may be a crash/restart
+loop, where the Console Task dies and gets relaunched by some
+supervisor before ever reaching a real input-reading state. Would
+explain why literally no injection method, timed any way, has ever
+gotten a reaction.
+
+## 2026-09-16/17: real SIO-board correction from the user -- address 11 needs Q=1 too, fixed
+
+The user examined the actual SIO board schematic further and found a
+real, previously-missed detail: address `11` (`N=1`, **`Q=1`** -- not
+`N=1` alone) selects a CD4076 latch whose bit 1 drives the CDP1854's
+`RSEL` pin directly. Checking `cs1800_console.vhd`/`cs1800_prcx18_top.vhd`
+against this confirmed a real bug: `sel1_n <= '0' WHEN n_i = "001" ELSE '1'`
+was missing the `Q='1'` qualifier that `sel4_n` right next to it
+already correctly required for address 14. Real consequence: during
+the boot-time device-clear sweep (`doc/PRCX18_ANALYSIS.md`), which
+explicitly sets `Q=0` before sweeping `OUT1..7`, this model was
+incorrectly capturing that as a real write to the RSEL latch; real
+hardware would have ignored it (address 11 requires `Q=1`).
+
+Fixed in both files (`sel1_n <= '0' WHEN (n_i = "001" AND Q = '1') ELSE '1'`,
+matching `sel4_n`'s existing pattern exactly). Verified: full GHDL
+golden-reference regression unchanged (the synthetic test program
+doesn't happen to exercise this exact edge case), and the real ROM
+through `tb_prcx18_lutram.vhd` produces the identical byte-for-byte
+boot capture -- the fix was behaviorally invisible in this particular
+trace (the incorrect Q=0-phase capture apparently never got read
+before being correctly overwritten by the real Q=1 phase), but it's
+still the correct fix to keep, matching the real hardware exactly now
+rather than by lucky coincidence.
+
+The user also noted address 11 is a **general-purpose reset/preset
+latch**, not UART-RSEL-dedicated -- other bits likely drive unrelated
+reset lines, so not every `OUT 1` in the ROM is about the UART. Grepped
+the full 8192-byte ROM (previous passes missed the tail end past
+~0x1B64) for every `OUT 1`/`OUT 4` occurrence and classified by
+adjacency: three tightly-paired `OUT1`->`OUT4` sequences look like
+genuine RSEL-then-register-access (`0x0FA8`/`0x0FAA`, `0x0FAC`/`0x0FAE`,
+`0x1E66`/`0x1E67`, the last found in ROM that no earlier pass had
+scanned at all), while six other `OUT 1`/`OUT 4` occurrences are
+isolated (`0x0023`, `0x03BD`, `0x03CD`, `0x0A70`, `0x0AE2`, `0x1057`,
+`0x10C7`, `0x1481`, `0x1E71`) -- consistent with the user's
+general-purpose-reset-line theory, though `0x03BD`/`0x03CD` carry the
+usual `SEP`-dispatch-desync caveat on their exact addresses.
+
