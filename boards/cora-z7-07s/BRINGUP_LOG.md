@@ -1816,3 +1816,124 @@ isolated (`0x0023`, `0x03BD`, `0x03CD`, `0x0A70`, `0x0AE2`, `0x1057`,
 general-purpose-reset-line theory, though `0x03BD`/`0x03CD` carry the
 usual `SEP`-dispatch-desync caveat on their exact addresses.
 
+## 2026-09-17: real-hardware forensics on the real backplane -- interrupts ruled out, polling confirmed, receive handler still not located, real clock speed fixed
+
+A long, mostly real-hardware-driven session. Summary, roughly in order:
+
+**Bridge bug found and fixed**: `interactive_console.sh`'s Ctrl-C
+never worked, because `stty raw` disables the tty's own signal
+generation (ISIG) -- a real Ctrl-C reaches the remote system as a
+literal byte instead, exactly like any real serial terminal
+(cu/minicom/screen all use a dedicated escape key for this reason).
+This briefly raised doubt about whether the whole keyboard-forwarding
+path even worked. Fixed with an explicit Ctrl-] (0x1D) exit check plus
+a per-keystroke debug log (`/tmp/interactive_console_debug.log`) --
+the log conclusively showed every typed character (`D`,`M`,`P`,`CR`,
+repeats) was captured and forwarded correctly the whole time; the exit
+key was the only real bug. **A live human typed `DMP<CR>` directly,
+multiple times, at real reaction-time pacing, with zero reaction from
+PRCX-18** -- the strongest negative result of the whole investigation,
+ruling out any remaining "scripted timing got unlucky" explanation.
+
+**Real oscilloscope measurement #1 (`nINT`)**: with a brick holding the
+spacebar down on a real VT100 connected to the real CS1800, `nINT`
+shows *only* the regular ~5us LC/50Hz timer needle pulses -- zero
+extra pulses from incoming characters. Disabling LC entirely: zero
+interrupts at all. **Directly proves, on the real, original 1980s
+hardware, independent of this FPGA port entirely: PRCX-18 does not use
+CDP1854 receive interrupts.** Fully vindicates every `IE=0` finding
+from this port's own testing (`control_reg=0x1B` measured live,
+mechanically-verified full-execution traces, the CDP1854 datasheet's
+own Mode-1 "recommended non-interrupt-driven" reference circuit) --
+not a quirk of the reimplementation, this is exactly how the real
+machine behaves.
+
+**Real oscilloscope measurement #2 (`RSEL`)**: normally `1`.
+During boot, dips to `0` once per transmitted character (the expected
+TX write). **While actually typing on the real VT100, dips to `0`
+again -- and every real keystroke sent (bricked at ~60 chars/sec)
+produces exactly two dips: ~200us low, ~25us high, ~110us low, then
+back high.** Direct, unambiguous proof PRCX-18 accesses the CDP1854's
+Data register pair twice per received character (almost certainly:
+read the received byte, then echo it back out) -- via **polling**, not
+interrupts, exactly matching measurement #1.
+
+**Real oscilloscope measurement #3 (CD4028 decoder outputs, address 11
+and address 14 directly)**: both normally `0`, both show regular
+needle pulses to `1` at **~680Hz, continuously, regardless of whether
+a key is being pressed**. Direct proof of a free-running software
+polling loop touching both the RSEL-select latch and the UART
+continuously -- not synchronized to the 50Hz LC tick, and running
+whether or not there's anything to receive. This resolves why the
+"idle heartbeat" state looked silent from the outside: a poll that
+finds `DA=0` has zero visible effect on TX output.
+
+**Matching this design's own `RSEL` (probe17, added this session) to
+an ILA trigger**: dips regularly on real silicon here too, confirming
+this design's software does execute *some* `OUT1`->`OUT4` polling
+sequence matching the real machine's rhythm. Traced the first one
+found (triggered on the very first `RSEL` falling edge) back to
+`0x1054`(`OUT 1`)/`0x1057`(`OUT 4`) -- a location not even in the
+earlier static grep (more `SEP`-dispatch desync hiding it). Captured
+the full instruction sequence following it twice, once with `DA=0`
+(baseline) and once with `DA=1` (held): **byte-for-byte identical
+control flow both times** (`0x1057`->`0x1058`->`0x10f6`->`0x1002`->
+`0xf603`->`0xf610`->`0xf658`->`0x1059`...), even though
+`dbg_uart_status` genuinely differed (`0xC0` vs `0xC1`). Strongly
+suggests this specific poll checks `THRE` (bit 7, always `1` in this
+model) for transmit readiness, not `DA` -- an unrelated, TX-side check
+sharing the same 680Hz-ish rhythm, not the receive handler.
+
+**Hunted for the real receive handler** using the two remaining
+candidate `OUT1`->`OUT4` pairs from the earlier full-ROM grep
+(`0x0FA8`/`0x0FAA` and `0x0FAC`/`0x0FAE` -- two back-to-back pairs in
+one small subroutine, a promising structural match for the
+oscilloscope's two-dip-per-character pattern; also tried `0x1E66`/
+`0x1E67`). Set the ILA to trigger on `ram_addr` equalling each
+candidate directly. **None of them were ever visited -- not during
+idle, and not with `DA` held for 15+ seconds.** The real receive
+handler's actual address is still unknown.
+
+**Real clock speed correction**: the user confirmed the real CS1800's
+CDP1802 runs at **4MHz**, not this design's `25MHz` -- a 6.25x
+mismatch, present since the very first bring-up milestone. Theory:
+PRCX-18's receive-polling logic might depend on real elapsed-time-
+calibrated software delay loops (not just the CDP1854's own hardware
+`DA` flag), which would desync completely at 6.25x speed regardless of
+how correct the electrical `DA`/`RSEL`/`nINT` modeling is otherwise.
+Rebuilt and reprogrammed at the real 4MHz (`g_lc_half_period` rescaled
+to 40,000 cycles, keeping LC at real 50Hz) -- a genuine, permanent
+correctness improvement worth keeping regardless of outcome. Retested:
+boot still succeeds correctly (proportionally slower, as expected);
+the same two candidate addresses are *still* never visited with `DA`
+held. **Held `DA` for ~10s at the correct 4MHz speed and got a new,
+more severe symptom**: instead of the usual `-SYS-Starting Console
+Task-` restart, a **partial re-print of the entire boot banner**
+(clear-screen, bell, `"Dutch 1800 MicroP"`, cut off mid-word) appeared
+mid-stream -- looks closer to a full reset than a task-level restart.
+The clock fix did not resolve the core mystery, but real timing wasn't
+ruled out as *a* contributing factor either -- worth keeping in mind
+if this is revisited.
+
+**Where this leaves things**: interrupts are conclusively ruled out
+(real hardware, independent of this port). Polling is conclusively
+confirmed (real hardware, independent of this port), at ~680Hz,
+touching both address 11 and address 14 continuously. This port's own
+software provably executes *some* matching `OUT1`->`OUT4` sequence
+(the `0x1054`/`0x1057` one found), but that one appears to be a TX/
+`THRE` check, not the RX/`DA` check -- the real receive handler's
+address is still unlocated, and injecting `DA=1` (however it's held,
+whatever the clock speed) reliably causes *some* kind of disruption
+(a Console Task restart, stream corruption, or now a partial banner
+re-print) rather than either silence or a correct read-and-echo. The
+most likely remaining explanation: this model's instant, edge-less,
+un-timed `DA` assertion is different enough from a real UART's
+bit-serial-timed reception that it trips a fault/error path a
+genuinely-timed character would never hit -- meaning the next real
+step is likely either modeling actual bit-serial receive timing in
+`cdp1854.vhd` (a real shift register, real start-bit detection, a
+realistic ~2ms-per-character arrival profile matching the real 4800
+baud rate), or further careful real-hardware disassembly/tracing to
+locate the actual receive handler precisely before guessing at its
+behavior further.
+
