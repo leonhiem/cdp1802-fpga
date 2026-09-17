@@ -104,6 +104,17 @@ ENTITY cs1800_prcx18_top IS
     dbg_uart_control : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
     dbg_uart_status  : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
 
+    -- Direct RSEL visibility, 2026-09-17 -- see BRINGUP_LOG.md: the
+    -- user's own oscilloscope measurement on the real backplane found
+    -- RSEL (normally '1') dips to '0' correlated with each real
+    -- keystroke, with nINT never pulsing -- i.e. real PRCX-18 reads
+    -- the CDP1854's Data register (a genuine receive-path access) in
+    -- response to a keystroke, via polling, not interrupts. This taps
+    -- the exact same signal (io_sel_reg(1), fed straight into
+    -- u_uart_a's rsel port) so the same behavior can be checked
+    -- directly in this design.
+    dbg_rsel : OUT STD_LOGIC;
+
     -- cs1800_prcx18_memory Port B: native BRAM-style port for axi_bram_ctrl.
     ram_b_addr : IN  STD_LOGIC_VECTOR(15 DOWNTO 0);
     ram_b_din  : IN  STD_LOGIC_VECTOR(31 DOWNTO 0);
@@ -270,6 +281,7 @@ BEGIN
 
   dbg_Q    <= Q;
   dbg_nEF2 <= nEF_i(1);
+  dbg_rsel <= io_sel_reg(1);
 
   dbg_ram_addr <= ram_addr;
   dbg_data     <= ram_wdata;

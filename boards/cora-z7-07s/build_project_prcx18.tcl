@@ -135,7 +135,7 @@ set_property -dict [list CONFIG.NUM_PORTS {2} CONFIG.IN0_WIDTH {8} CONFIG.IN1_WI
 # --- Debug: system_ila on ram_addr/data/nMRD/nMWR/SC/TPB ---
 set u_ila_0 [create_bd_cell -type ip -vlnv xilinx.com:ip:system_ila:1.1 u_ila_0]
 set_property CONFIG.C_MON_TYPE {NATIVE} $u_ila_0
-set_property CONFIG.C_NUM_OF_PROBES {17} $u_ila_0
+set_property CONFIG.C_NUM_OF_PROBES {18} $u_ila_0
 set_property -dict [list \
   CONFIG.C_DATA_DEPTH {4096} \
   CONFIG.C_PROBE0_WIDTH {16} \
@@ -155,6 +155,7 @@ set_property -dict [list \
   CONFIG.C_PROBE14_WIDTH {16} \
   CONFIG.C_PROBE15_WIDTH {8} \
   CONFIG.C_PROBE16_WIDTH {8} \
+  CONFIG.C_PROBE17_WIDTH {1} \
 ] $u_ila_0
 # probe0=ram_addr probe1=data probe2=nMRD probe3=nMWR probe4=SC probe5=TPB
 # probe6=tmp_page probe7=R_in probe8=forceS1 probe9=extraS1 probe10=R(A)
@@ -171,6 +172,11 @@ set_property -dict [list \
 # 2026-09-16 ("keystroke injection, fourth attempt") to measure IE
 # (probe15 bit5) and DA (probe16 bit0) directly on real hardware,
 # rather than continuing to infer IE's value from disassembly alone.
+# probe17=RSEL -- added 2026-09-17, per the user's own oscilloscope
+# measurement on the real backplane finding RSEL dips correlated with
+# real keystrokes while nINT never pulses (a real, polling-based
+# receive-path access) -- checks whether this design's own software
+# reaches the same code path.
 
 # ---------------------------------------------------------------------
 # Connections
@@ -241,6 +247,7 @@ connect_bd_net [get_bd_pins cs1800_prcx18_top_0/dbg_nEF2]     [get_bd_pins u_ila
 connect_bd_net [get_bd_pins cs1800_prcx18_top_0/dbg_R1]       [get_bd_pins u_ila_0/probe14]
 connect_bd_net [get_bd_pins cs1800_prcx18_top_0/dbg_uart_control] [get_bd_pins u_ila_0/probe15]
 connect_bd_net [get_bd_pins cs1800_prcx18_top_0/dbg_uart_status]  [get_bd_pins u_ila_0/probe16]
+connect_bd_net [get_bd_pins cs1800_prcx18_top_0/dbg_rsel]         [get_bd_pins u_ila_0/probe17]
 
 assign_bd_address -offset 0x41200000 -range 0x00001000 \
   -target_address_space [get_bd_addr_spaces processing_system7_0/Data] \
