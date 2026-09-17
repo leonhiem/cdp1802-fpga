@@ -32,8 +32,20 @@
 #     (axi_gpio_1 channel 1, 0x41210000), then clears it -- a single
 #     keystroke, not held indefinitely (matching how a real UART
 #     receives one character at a time).
-#   - Ctrl-C (or any exit) restores the tty and kills the background
-#     drain loop via a trap.
+#   - Exit key is Ctrl-] (0x1D), checked explicitly in the foreground
+#     loop -- NOT Ctrl-C. `stty raw` disables the tty's own signal
+#     generation (ISIG) so a real Ctrl-C reaches the remote system as a
+#     literal byte, same as any real serial terminal (cu/minicom/screen
+#     all use a dedicated escape key for exactly this reason) --
+#     relying on a SIGINT trap here was a bug (found 2026-09-17, real
+#     hardware testing): Ctrl-C can never generate that signal while
+#     raw mode is active, so the trap could never fire from the
+#     keyboard. `trap cleanup INT TERM` is kept as a fallback for an
+#     external `kill`/`pkill` (those signals aren't affected by ISIG).
+#   - Every forwarded byte is logged to /tmp/interactive_console_debug.log
+#     (decimal value + character) so it's possible to directly confirm
+#     what was actually captured and forwarded, instead of assuming the
+#     keyboard path worked.
 #
 # Usage (from the board's own shell, after the design is programmed,
 # the ROM is loaded, and reset released -- see gen_load_prcx18_rom.py's
@@ -78,11 +90,20 @@ trap cleanup INT TERM
 ) &
 bg_pid=$!
 
+DEBUG_LOG=/tmp/interactive_console_debug.log
+: > "$DEBUG_LOG"
+
 # Foreground: forward one typed byte at a time.
 while true; do
   ch=$(dd bs=1 count=1 2>/dev/null | od -An -tu1 | tr -d ' ')
   [ -z "$ch" ] && continue
+  echo "recv byte dec=$ch" >> "$DEBUG_LOG"
+  if [ "$ch" -eq 29 ]; then
+    # Ctrl-] -- real exit key, see header note above.
+    cleanup
+  fi
   val=$(( (1 << 8) | ch ))
   busybox devmem $RX 32 "$(printf '0x%03x' $val)"
+  echo "wrote RX=$(printf '0x%03x' $val)" >> "$DEBUG_LOG"
   busybox devmem $RX 32 0x0
 done

@@ -68,9 +68,14 @@ create_bd_design "system"
 set processing_system7_0 [create_bd_cell -type ip -vlnv xilinx.com:ip:processing_system7:5.5 processing_system7_0]
 source "$script_dir/ps7_config.tcl"
 
-# See build_project.tcl's own comment: 25 MHz for this reverse-
-# engineered core's comfortable timing margin, not chasing max speed.
-set_property CONFIG.PCW_FPGA0_PERIPHERAL_FREQMHZ {25} $processing_system7_0
+# Real CS1800 CPU clock confirmed by the user directly (2026-09-17):
+# 4MHz, not 25MHz -- testing whether PRCX-18's receive-polling logic
+# depends on real elapsed-time-calibrated software delay loops (not
+# just the CDP1854's own DA flag), which would desync at 6.25x the
+# real speed regardless of how correct the electrical DA/RSEL/nINT
+# modeling is otherwise. See BRINGUP_LOG.md's "keystroke injection"
+# entries for the full investigation that led here.
+set_property CONFIG.PCW_FPGA0_PERIPHERAL_FREQMHZ {4} $processing_system7_0
 
 set rst_ps7_0_100M [create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 rst_ps7_0_100M]
 set axi_smc [create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 axi_smc]
@@ -109,8 +114,9 @@ set_property CONFIG.SINGLE_PORT_BRAM {1} $axi_bram_ctrl_0
 
 # --- cs1800_prcx18_top: our RTL, as a module reference ---
 set cs1800_prcx18_top_0 [create_bd_cell -type module -reference cs1800_prcx18_top cs1800_prcx18_top_0]
-# 50 Hz LC at CLOCK = 25 MHz -- see build_project.tcl's own comment.
-set_property CONFIG.g_lc_half_period {250000} $cs1800_prcx18_top_0
+# 50 Hz LC at CLOCK = 4 MHz (real speed, see the CLOCK freq change
+# above) -- half period = 4,000,000 * 0.01s = 40,000 cycles.
+set_property CONFIG.g_lc_half_period {40000} $cs1800_prcx18_top_0
 # g_ram_words left at its entity default (256 = 1KB) -- see
 # cs1800_prcx18_memory.vhd's header for the full story: the original
 # 384-word (1.5KB, non-power-of-two) choice caused a real hardware-only
