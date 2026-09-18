@@ -136,7 +136,28 @@ set_property CONFIG.g_lc_half_period {40000} $cs1800_prcx18_top_0
 # the RAM index, eliminating this class of aliasing entirely (matches
 # Port B's own native 16-bit ram_b_addr width exactly, so no address
 # is left unreachable either way).
-set_property CONFIG.g_ram_words {16384} $cs1800_prcx18_top_0
+#
+# UPDATE 2026-09-18, same day: 16384 words (64KB) does NOT fit this
+# device -- place_design failed with "RAMB36/FIFO over-utilized...
+# requires 80 of such cell types but only 50 compatible sites are
+# available" (XC7Z007S only has 50 RAMB36 tiles total). Tried 8192
+# words (32KB) next -- that fits and synthesizes/implements cleanly
+# (0 errors, timing closes with WNS=26.983ns), and the real ROM content
+# verified correct after loading -- but the real CPU (Port A, native,
+# bypasses axi_bram_ctrl entirely) hangs at a fixed address on real
+# hardware after 90+ seconds, while GHDL simulation at the exact same
+# g_ram_words=8192 runs the full 5ms boot cleanly with zero issues -- a
+# real-hardware-only symptom (most likely a genuine BRAM-primitive-
+# cascading glitch specific to this size, not caught by behavioral
+# simulation) that wasn't root-caused before the user asked to step
+# back to the real machine's own documented minimal configuration
+# instead: 8KB ROM + 8KB RAM (2048 words), the exact size this whole
+# port already used successfully for the entire rest of this session.
+# The 0xFBD0-class RAM aliasing bug this size still has is a known,
+# real, currently-unfixed issue -- revisit if a way to safely grow RAM
+# is found (e.g. freeing BRAM elsewhere, like the ILA's DATA_DEPTH, or
+# understanding/avoiding whatever the 32KB hang's real cause is).
+set_property CONFIG.g_ram_words {2048} $cs1800_prcx18_top_0
 
 # --- Bit-slice/concat glue for axi_gpio_1's two 9-bit channels: get_bd_pins'
 # own [n:m] bit-range syntax collides with Tcl's own bracket parsing when
@@ -290,11 +311,10 @@ assign_bd_address -offset 0x41210000 -range 0x00001000 \
   -target_address_space [get_bd_addr_spaces processing_system7_0/Data] \
   [get_bd_addr_segs axi_gpio_1/S_AXI/Reg] -force
 
-# 64KB range, matching Port B's own native 16-bit ram_b_addr width
-# exactly (see g_ram_words note above -- the real 8KB ROM plus the now
-# full-64KB-addressable RAM together cover the CPU's entire real
-# address space with no aliasing).
-assign_bd_address -offset 0x40000000 -range 0x00010000 \
+# 16KB range, matching the real minimal 8KB ROM + 8KB RAM config (see
+# g_ram_words note above -- stepped back from the 64KB/32KB attempts
+# after the 32KB size hit a real-hardware-only hang).
+assign_bd_address -offset 0x40000000 -range 0x00004000 \
   -target_address_space [get_bd_addr_spaces processing_system7_0/Data] \
   [get_bd_addr_segs axi_bram_ctrl_0/S_AXI/Mem0] -force
 
