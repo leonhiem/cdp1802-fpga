@@ -125,18 +125,29 @@
 --   its own actual installed range; every other address is genuinely
 --   unmapped (no chip drives the bus at all), never aliased onto a
 --   populated chip. `eff_is_rom`/`a_is_rom` (ROM, 0x0000-0x1FFF) now
---   has a sibling `eff_is_ram_valid`/`a_is_ram_valid` (RAM, exactly
---   `c_rom_size` to `c_rom_size + g_ram_words*4 - 1` -- i.e. starting
---   right after ROM, sized to whatever g_ram_words actually is, not a
---   moment longer). Anything in neither range is genuinely unmapped:
---   Port A writes there are silently discarded (same as a real EPROM's
---   WE pin doing nothing) and reads return a fixed `c_unmapped_byte`
---   pattern instead of real memory content -- not a guess at any
---   *specific* real open-bus value (that would depend on the real
---   bus's actual pull-up/pull-down/capacitive behavior, not modeled
---   here), just a fixed, non-aliasing placeholder that reliably fails
---   PRCX-18's own write-then-readback RAM-sizing probe at the correct,
---   real boundary instead of always succeeding.
+--   has a sibling `eff_is_ram_valid`/`a_is_ram_valid` (RAM). Anything
+--   in neither range is genuinely unmapped: Port A writes there are
+--   silently discarded (same as a real EPROM's WE pin doing nothing)
+--   and reads return a fixed `c_unmapped_byte` pattern instead of real
+--   memory content -- not a guess at any *specific* real open-bus
+--   value (that would depend on the real bus's actual pull-up/pull-
+--   down/capacitive behavior, not modeled here), just a fixed, non-
+--   aliasing placeholder that reliably fails PRCX-18's own
+--   write-then-readback RAM-sizing probe at the correct, real boundary
+--   instead of always succeeding.
+--
+--   UPDATE, same day: RAM does NOT start right after ROM. An
+--   instrumented GHDL simulation logging every real memory write
+--   during boot (real ROM, full 64KB-addressable RAM) showed the
+--   RAM-sizing sweep's write-then-readback probing never touches
+--   0x2000-0x3FFF at all -- that's the real backplane's *second*
+--   EPROM slot (a macro assembler ROM, see doc/CS1800_HARDWARE.md's
+--   real memory map), not RAM -- and starts cleanly at 0x4000 instead.
+--   User-confirmed directly on real hardware: a minimal RAM chip
+--   installed at 0x2000 (this file's original assumption) is *never
+--   tested or used* by PRCX-18 at all; it has to be installed at
+--   0x4000 (ROM 0x0000-0x1FFF, RAM 0x4000-0x5FFF) to actually be found
+--   and used. See `c_ram_base_addr` below.
 --
 -------------------------------------------------------------------------------
 
@@ -190,12 +201,31 @@ ARCHITECTURE str OF cs1800_prcx18_memory IS
   -- needs a real divider.
   CONSTANT c_ram_addr_bits : INTEGER := integer(round(log2(real(g_ram_words))));
 
-  -- Real chip-select range for RAM: starts right after ROM, sized to
-  -- whatever g_ram_words actually is -- see this file's header. A
-  -- plain range compare (not a bit-pattern match) so this stays
-  -- correct for any power-of-two g_ram_words without further changes.
-  CONSTANT c_ram_base  : unsigned(15 DOWNTO 0) := to_unsigned(c_rom_size, 16);
-  CONSTANT c_ram_top   : unsigned(15 DOWNTO 0) := to_unsigned(c_rom_size + g_ram_words*4 - 1, 16);
+  -- Real chip-select range for RAM. NOT right after ROM: confirmed by
+  -- the user directly against real hardware (2026-09-18) -- 0x2000-
+  -- 0x3FFF is the real backplane's *second* EPROM slot (a macro
+  -- assembler ROM, see doc/CS1800_HARDWARE.md's real memory map), so
+  -- PRCX-18's own boot-time RAM-detection sweep never tests it at all
+  -- -- confirmed directly via an instrumented GHDL simulation logging
+  -- every memory write: literally zero writes land in 0x2000-0x3FFF,
+  -- and the sweep's own write-then-readback probing starts cleanly at
+  -- 0x4000. A minimal real config's RAM chip therefore has to be
+  -- installed at 0x4000, not 0x2000, or the sweep finds zero usable
+  -- RAM at the very first address it ever tests -- user-confirmed
+  -- working on real hardware with exactly this map (ROM 0x0000-0x1FFF,
+  -- RAM 0x4000-0x5FFF). c_ram_base_addr is its own named constant
+  -- (not derived from c_rom_size) for exactly this reason -- the two
+  -- regions are not adjacent. 0x4000 = 2^14 is itself a clean 16KB-
+  -- aligned address, so the existing bit-slice RAM index
+  -- (a_address(c_ram_addr_bits+1 downto 2), unchanged below) still
+  -- computes the correct in-window offset with no extra subtraction --
+  -- but only as long as g_ram_words*4 <= 16384 (g_ram_words <= 4096).
+  -- A future g_ram_words larger than that would need an explicit
+  -- "a_address - c_ram_base" subtraction added to the index
+  -- computation instead of relying on this alignment coincidence.
+  CONSTANT c_ram_base_addr : INTEGER := 16#4000#;
+  CONSTANT c_ram_base  : unsigned(15 DOWNTO 0) := to_unsigned(c_ram_base_addr, 16);
+  CONSTANT c_ram_top   : unsigned(15 DOWNTO 0) := to_unsigned(c_ram_base_addr + g_ram_words*4 - 1, 16);
 
   -- Fixed value returned for a genuinely unmapped Port A read -- see
   -- this file's header for why this is a placeholder, not a claim
