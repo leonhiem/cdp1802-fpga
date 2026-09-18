@@ -173,7 +173,7 @@ set_property -dict [list CONFIG.NUM_PORTS {2} CONFIG.IN0_WIDTH {8} CONFIG.IN1_WI
 # --- Debug: system_ila on ram_addr/data/nMRD/nMWR/SC/TPB ---
 set u_ila_0 [create_bd_cell -type ip -vlnv xilinx.com:ip:system_ila:1.1 u_ila_0]
 set_property CONFIG.C_MON_TYPE {NATIVE} $u_ila_0
-set_property CONFIG.C_NUM_OF_PROBES {20} $u_ila_0
+set_property CONFIG.C_NUM_OF_PROBES {21} $u_ila_0
 set_property -dict [list \
   CONFIG.C_DATA_DEPTH {4096} \
   CONFIG.C_PROBE0_WIDTH {16} \
@@ -196,6 +196,7 @@ set_property -dict [list \
   CONFIG.C_PROBE17_WIDTH {1} \
   CONFIG.C_PROBE18_WIDTH {16} \
   CONFIG.C_PROBE19_WIDTH {8} \
+  CONFIG.C_PROBE20_WIDTH {8} \
 ] $u_ila_0
 # probe0=ram_addr probe1=data probe2=nMRD probe3=nMWR probe4=SC probe5=TPB
 # probe6=tmp_page probe7=R_in probe8=forceS1 probe9=extraS1 probe10=R(A)
@@ -229,6 +230,13 @@ set_property -dict [list \
 # side-effect and dbg_uart_status both show 0xC1 (DA=1) right after
 # 0x1008 -- D itself has never been observed directly before this,
 # only inferred.
+# probe20=io_sel_reg (the full CD4076 latch, cs1800_prcx18_top.vhd's
+# own io_sel_reg) -- added 2026-09-18: dbg_uart_status/probe16 shows
+# DA stuck at 1 from power-on onward, never once reading 0 -- meaning
+# da_reg's async reset (wired to io_sel_reg(7), the real nMR trigger
+# per the user's own schematic reading) either never actually gets
+# asserted by PRCX-18's own boot code on this port, or something else
+# is wrong. Probing the whole register directly to settle which.
 
 # ---------------------------------------------------------------------
 # Connections
@@ -302,6 +310,7 @@ connect_bd_net [get_bd_pins cs1800_prcx18_top_0/dbg_uart_status]  [get_bd_pins u
 connect_bd_net [get_bd_pins cs1800_prcx18_top_0/dbg_rsel]         [get_bd_pins u_ila_0/probe17]
 connect_bd_net [get_bd_pins cs1800_prcx18_top_0/dbg_a_full]       [get_bd_pins u_ila_0/probe18]
 connect_bd_net [get_bd_pins cs1800_prcx18_top_0/dbg_D]            [get_bd_pins u_ila_0/probe19]
+connect_bd_net [get_bd_pins cs1800_prcx18_top_0/dbg_io_sel_reg]   [get_bd_pins u_ila_0/probe20]
 
 assign_bd_address -offset 0x41200000 -range 0x00001000 \
   -target_address_space [get_bd_addr_spaces processing_system7_0/Data] \
