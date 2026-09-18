@@ -316,26 +316,39 @@ BEGIN
   -- snapshot -- never mixes a freshly-changing address with a
   -- previous cycle's word the way an unregistered post-read mux would
   -- (see this file's "bug #2" history for exactly that hazard shape).
+  -- IMPORTANT: exactly one unconditional `mem(idx)` read call, idx
+  -- computed via a plain 2-way mux (same shape this file always used)
+  -- -- NOT a conditional read split across separate IF branches. A
+  -- first attempt at this fix did exactly that (one mem(...) read per
+  -- branch, one branch with no read at all) and it desynthesized this
+  -- whole array from Block RAM back to distributed/LUTRAM (confirmed
+  -- directly: "LUT as Distributed RAM over-utilized... requires 8622,
+  -- only 6000 available" -- this file's own old LUTRAM ceiling,
+  -- exactly the failure mode "bug #2"'s history warns about). The
+  -- genuinely-unmapped case still reads *some* in-range word (garbage,
+  -- unused) via the same single read call; a_unmapped_reg is computed
+  -- entirely separately and overrides a_data_out below regardless of
+  -- what a_word_reg holds in that case.
   PROCESS (clk) IS
     VARIABLE rom_idx : NATURAL RANGE 0 TO c_rom_words - 1;
     VARIABLE ram_idx : NATURAL RANGE 0 TO g_ram_words - 1;
+    VARIABLE idx     : NATURAL RANGE 0 TO c_mem_words - 1;
   BEGIN
     IF rising_edge(clk) THEN
       IF (a_nCS = '0' AND a_nOE = '0') THEN
-        a_sel_reg  <= '1';
-        a_lane_reg <= a_address(1 DOWNTO 0);
+        rom_idx := to_integer(unsigned(a_address(12 DOWNTO 2)));
+        ram_idx := to_integer(unsigned(a_address(c_ram_addr_bits + 1 DOWNTO 2)));
         IF a_is_rom = '1' THEN
-          rom_idx        := to_integer(unsigned(a_address(12 DOWNTO 2)));
-          a_word_reg     <= mem(rom_idx);
-          a_unmapped_reg <= '0';
-        ELSIF a_is_ram_valid = '1' THEN
-          ram_idx        := to_integer(unsigned(a_address(c_ram_addr_bits + 1 DOWNTO 2)));
-          a_word_reg     <= mem(c_rom_words + ram_idx);
+          idx := rom_idx;
+        ELSE
+          idx := c_rom_words + ram_idx;
+        END IF;
+        a_word_reg <= mem(idx);
+        a_lane_reg <= a_address(1 DOWNTO 0);
+        a_sel_reg  <= '1';
+        IF a_is_rom = '1' OR a_is_ram_valid = '1' THEN
           a_unmapped_reg <= '0';
         ELSE
-          -- Genuinely unmapped -- see this file's header. a_word_reg's
-          -- own value doesn't matter here (a_unmapped_reg overrides it
-          -- in a_data_out below), so it's simply left unchanged.
           a_unmapped_reg <= '1';
         END IF;
       ELSE
