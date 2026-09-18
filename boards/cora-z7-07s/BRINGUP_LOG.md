@@ -2069,4 +2069,108 @@ worth remembering for future sessions:
   from the documented value and was reset back to it via the serial
   console) left every retry prompt unanswered forever. Fixed to resend
   on every `password:` prompt it sees, not just the first.
+- **The Cora's root filesystem is a ramdisk** (per the user): any
+  runtime change under `/` (the `passwd` reset above included) is lost
+  on a real power cycle, reverting to the documented default
+  (`CoraMora`) every time -- not genuine "drift", just this board's
+  normal behavior. Worth remembering before chasing a credentials
+  mystery again.
+
+## 2026-09-18 (continued): retrying DMP -- real progress, a self-
+inflicted board crash, a systematic INP audit, and a real spurious-DA
+bug the fix uncovered
+
+**First DMP retry, non-interactively** (a script injecting `D`,`M`,
+`P`,`<CR>` one at a time via `uart_rx_data`/`uart_rx_available`,
+draining the TX FIFO throughout, since a live human typing through
+`interactive_console.sh` isn't reproducible from this side): the
+first attempt used `sleep 0.06` between characters for realistic
+typing pace -- but busybox's `sleep` here only accepts whole seconds,
+so `sleep 0.06` silently failed and all four characters landed
+essentially simultaneously on a UART model with a single holding
+register (no real FIFO), guaranteeing loss/corruption. Fixed with
+`usleep 60000`. Both attempts produced a real, correctly-formatted
+`-MRCI-NOT FOUND-` response (confirmed against the real CS1800 by the
+user: this is PRCX-18's fixed, generic "command not recognized"
+message, unrelated to what was actually typed -- verified directly in
+the ROM binary too, as a literal string at `0x16F5`) -- meaningful
+progress, since a live human typing `DMP<CR>` through the
+byte-verified-correct `interactive_console.sh` bridge got **zero
+reaction at all** in an earlier session (before today's `INP` fix).
+Characters are now being detected and processed; they're just not
+assembling into a clean `DMP` yet.
+
+**A completely clean boot (fresh ROM reload, zero keystrokes injected,
+pure passive listening) still shows PRCX-18's own Console Task
+restarting on its own** (`_08>` -> `_10>` -> `_18>`, each restart
+adding more embedded NUL bytes), which fully reframes the DMP-garbling
+mystery: this self-triggering restart storm, not injection timing, is
+the real interference. Before today's `INP` fix, `D` was permanently
+stuck reading `0x00` regardless of the real bus, so any pre-existing
+noise on the receive path was invisible; now that `D` is trustworthy,
+it's exposed.
+
+**Self-inflicted board crash while investigating this**: several test
+scripts start a tight, unthrottled `while true; do busybox devmem
+...; done &` background FIFO-drain loop, explicitly killed at the end
+of each script. If an SSH client-side `timeout` ever fired mid-script,
+that background loop could be orphaned on the board. A live JTAG PL
+reprogram issued while such a loop might still be spinning against the
+same AXI fabric wedged the board completely -- SSH *and* the serial
+console (normally rock solid all session) both went silent, while
+JTAG still saw `arm_dap_0`/`xc7z007s_1` fine, proving it was the PS7/
+Linux side specifically, not a hardware/power fault. Recovered via a
+real physical power cycle (user); post-cycle, both the root password
+and this host's SSH known_hosts entry needed fixing (see the ramdisk
+note above and `sshpw.py`'s fix). Lesson: confirm zero orphaned
+background loops on the board (`ps | grep devmem`) before any live
+JTAG reprogram, not just at the end of the script that started them.
+
+**Systematic audit, per the user's explicit request, of every other
+multi-cycle memory instruction in `instr.vhd` for the same class of
+bug** (not just relying on memory of the original diagnosis): checked
+all 54 `Do_MRD`/`Do_MWR` occurrences in the file.
+- Every `Do_MRD` (`LDN`, `LDXA`, `ADC`, `SDB`, `SMB`, `ADD`, `OR`,
+  `AND`, `XOR`, both `X`- and `P`-addressed variants, `OUT`,
+  `DMA_OUT`, ...) is asserted unconditionally for the whole
+  instruction -- the safe, correct pattern `INP` was fixed to match.
+- Five `Do_MWR` occurrences remain narrowly scoped to a single
+  `clk_cnt`, the same *shape* as the old `INP` bug: `STR`
+  (`D->M(R(N))`), `STXD` (`D->M(R(X))`), `SAV` (`T->M(R(X))`), `MARK`
+  (`T->M(R(2))`), and `DMA_IN` (external device `->M(R(0))`). Checked
+  each one's complete instruction block individually: none has a
+  second register latch (`wr_D` or similar) that depends on sampling
+  the same held bus value at a *later* `clk_cnt` -- they're all pure,
+  single-destination writes. A narrow one-cycle strobe is correct for
+  them, not a bug.
+- Conclusion: `INP` was structurally unique -- the only instruction
+  where two separate latches (`M(R(X))` *and* `D`) both need the
+  identical bus sample, at two different `clk_cnt` sub-states, and
+  also the only one where the write strobe wasn't held long enough to
+  cover both. High confidence this was a one-off, not a class of bugs
+  needing a similar fix elsewhere.
+
+**Found the real cause of the spontaneous Console Task restarts**, via
+a targeted ILA capture (trigger on `dbg_uart_status == 0x8'hC0`, i.e.
+`DA=1` -- all of `cdp1854.vhd`'s other status bits are fixed constants
+in this model, so the whole byte is always either `0x80` or `0xC0`,
+making a plain value trigger both simpler and more reliable than a
+per-bit edge trigger, which fought Vivado's `TRIGGER_COMPARE_VALUE`
+string syntax for several failed attempts): captured `status=0xC0`
+sitting continuously high across dozens of addresses, all in a
+completely unrelated part of the ROM (`0xFC9C`-`0xFCA1`, nowhere near
+the `0x1000` receive-poll loop) -- `DA` got set once and then simply
+never got cleared, because the CPU wasn't currently in the routine
+that would read and clear it. Root cause: `axi_gpio_1`'s output
+register (drives `uart_rx_data`/`uart_rx_available` into
+`cdp1854.vhd`'s `p_receive`) is **not guaranteed to power up at 0**
+after a JTAG bitstream reprogram -- if bit 8 (avail) happens to
+configure high, `p_receive`'s rising-edge detector sees a spurious
+"keystroke" on its very first evaluation, before any real character
+is ever written, latching garbage into `rx_holding_reg`/`da_reg`.
+
+**Fix**: `gen_load_prcx18_rom.py`'s generated script now explicitly
+writes `0x0` to `0x41210000` (zeroing `uart_rx_data`/
+`uart_rx_available`) before releasing reset, on every load -- not just
+relying on whatever the GPIO configured to.
 
