@@ -69,7 +69,13 @@ ENTITY cdp1802 IS
     dbg_extraS1  : OUT STD_LOGIC;
     dbg_R_A      : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
     dbg_R_B      : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
-    dbg_R1       : OUT STD_LOGIC_VECTOR(15 DOWNTO 0)
+    dbg_R1       : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
+    -- Added 2026-09-18 to chase the real-hardware ANI/BZ-at-0x100D/0x100F
+    -- mystery: D is inferred everywhere else in this session (via INP's
+    -- M(R(X)) write side-effect, or via uart status_reg) but never
+    -- observed directly. Taps D_out, the architecture's own accumulator
+    -- signal (see below).
+    dbg_D        : OUT STD_LOGIC_VECTOR(7 DOWNTO 0)
   );
 END cdp1802;
 
@@ -458,5 +464,7 @@ BEGIN
     carry_in => DF_out,
     carry_out => carry
   );
+
+  dbg_D <= D_out;
 
 END str;

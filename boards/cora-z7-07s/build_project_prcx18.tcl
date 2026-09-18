@@ -141,7 +141,7 @@ set_property -dict [list CONFIG.NUM_PORTS {2} CONFIG.IN0_WIDTH {8} CONFIG.IN1_WI
 # --- Debug: system_ila on ram_addr/data/nMRD/nMWR/SC/TPB ---
 set u_ila_0 [create_bd_cell -type ip -vlnv xilinx.com:ip:system_ila:1.1 u_ila_0]
 set_property CONFIG.C_MON_TYPE {NATIVE} $u_ila_0
-set_property CONFIG.C_NUM_OF_PROBES {19} $u_ila_0
+set_property CONFIG.C_NUM_OF_PROBES {20} $u_ila_0
 set_property -dict [list \
   CONFIG.C_DATA_DEPTH {4096} \
   CONFIG.C_PROBE0_WIDTH {16} \
@@ -163,6 +163,7 @@ set_property -dict [list \
   CONFIG.C_PROBE16_WIDTH {8} \
   CONFIG.C_PROBE17_WIDTH {1} \
   CONFIG.C_PROBE18_WIDTH {16} \
+  CONFIG.C_PROBE19_WIDTH {8} \
 ] $u_ila_0
 # probe0=ram_addr probe1=data probe2=nMRD probe3=nMWR probe4=SC probe5=TPB
 # probe6=tmp_page probe7=R_in probe8=forceS1 probe9=extraS1 probe10=R(A)
@@ -190,6 +191,12 @@ set_property -dict [list \
 # receive handler around 0x1000/0x1017) need reliable addressing;
 # probe0 has known multiplexing artifacts (see
 # cs1800_prcx18_memory.vhd's header).
+# probe19=D (the CPU's internal accumulator, cdp1802.vhd's D_out) --
+# added 2026-09-18: chasing why ANI 01 / BZ 0x29 at 0x100D/0x100F still
+# takes the "skip" branch even though INP4's own M(R(X)) write
+# side-effect and dbg_uart_status both show 0xC1 (DA=1) right after
+# 0x1008 -- D itself has never been observed directly before this,
+# only inferred.
 
 # ---------------------------------------------------------------------
 # Connections
@@ -262,6 +269,7 @@ connect_bd_net [get_bd_pins cs1800_prcx18_top_0/dbg_uart_control] [get_bd_pins u
 connect_bd_net [get_bd_pins cs1800_prcx18_top_0/dbg_uart_status]  [get_bd_pins u_ila_0/probe16]
 connect_bd_net [get_bd_pins cs1800_prcx18_top_0/dbg_rsel]         [get_bd_pins u_ila_0/probe17]
 connect_bd_net [get_bd_pins cs1800_prcx18_top_0/dbg_a_full]       [get_bd_pins u_ila_0/probe18]
+connect_bd_net [get_bd_pins cs1800_prcx18_top_0/dbg_D]            [get_bd_pins u_ila_0/probe19]
 
 assign_bd_address -offset 0x41200000 -range 0x00001000 \
   -target_address_space [get_bd_addr_spaces processing_system7_0/Data] \

@@ -127,6 +127,14 @@ ENTITY cs1800_prcx18_top IS
     -- multiplexing artifacts.
     dbg_a_full : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
 
+    -- Direct D (accumulator) visibility, 2026-09-18: chasing why the
+    -- ANI 01 / BZ 0x29 branch at 0x100D/0x100F still takes the "skip"
+    -- path even though INP4's own M(R(X)) write side-effect and
+    -- dbg_uart_status both show 0xC1 (DA=1) at 0x1008 -- D itself has
+    -- never been observed directly, only inferred. Direct passthrough
+    -- from cs1800/cs1800_cpu/cdp1802, no behavior change.
+    dbg_D : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
+
     -- cs1800_prcx18_memory Port B: native BRAM-style port for axi_bram_ctrl.
     ram_b_addr : IN  STD_LOGIC_VECTOR(15 DOWNTO 0);
     ram_b_din  : IN  STD_LOGIC_VECTOR(31 DOWNTO 0);
@@ -285,6 +293,7 @@ BEGIN
     dbg_R_A      => dbg_R_A,
     dbg_R_B      => dbg_R_B,
     dbg_R1       => dbg_R1,
+    dbg_D        => dbg_D,
     ram_data_out_ext => ram_rdata,
     io_data_in_ext   => io_din_i,
     A_full           => a_full_i

@@ -101,7 +101,8 @@ ENTITY cs1800 IS
     -- BRINGUP_LOG.md's "milestone 3n") -- promoted straight through.
     dbg_R_A : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
     dbg_R_B : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
-    dbg_R1  : OUT STD_LOGIC_VECTOR(15 DOWNTO 0)
+    dbg_R1  : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
+    dbg_D   : OUT STD_LOGIC_VECTOR(7 DOWNTO 0)
   );
 END cs1800;
 
@@ -163,7 +164,8 @@ BEGIN
     A_full       => A_full,
     dbg_R_A      => dbg_R_A,
     dbg_R_B      => dbg_R_B,
-    dbg_R1       => dbg_R1
+    dbg_R1       => dbg_R1,
+    dbg_D        => dbg_D
   );
 
   p_reg_high_addr : PROCESS(tpa, addr)
