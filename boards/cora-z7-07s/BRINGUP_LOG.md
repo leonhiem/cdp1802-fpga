@@ -2018,3 +2018,55 @@ to inactive before), with zero other differences anywhere in either
 trace. This is the expected, correct consequence of the fix, not a
 regression -- reference dumps updated and committed alongside it.
 
+**Confirmed against the real CDP1802 datasheet's own Figure 10,
+"Input Cycle Timing Waveforms"** (`~/Cdp1802-datasheet.pdf`, page 15):
+`N0-N2` (the device address) and, critically, the `DATA BUS` row
+(annotated "VALID DATA FROM INPUT DEVICE") are both shown valid across
+almost the *entire* EXECUTE (`S1`) cycle, not just around the narrow
+`MWR` pulse that happens partway through it -- i.e. the datasheet's
+own contract is that external I/O hardware must hold the byte on the
+bus for the whole EXECUTE cycle, precisely because the real chip
+samples that same bus at two separate internal moments (once for
+`M(R(X))`, once for `D`). This wasn't a quirk specific to this
+project's own CDP1854 model -- the old `instr.vhd` code was a genuine,
+datasheet-documented `INP` timing violation, now fixed to match.
+
+**Confirmed on real hardware**: rebuilt, reprogrammed, and reran the
+`0x1008` arm-then-inject capture with the new `dbg_D` probe. `D` now
+correctly reads `0xC0` -- exactly the same byte `INP4`'s own
+`M(R(X))` write puts on the bus in the same capture -- confirming the
+fix directly, not just via the golden-reference/local-boot regression.
+
+**Two more operational findings from this same real-hardware round**,
+worth remembering for future sessions:
+- **A plain Linux `reboot` (not a full power cycle) leaves the PS7-to-
+  PL AXI path for `axi_bram_ctrl_0` broken**: every `devmem` access to
+  the `0x40000000` ROM/RAM range raised `Bus error` (`SIGBUS`) after a
+  `reboot` command issued over the serial console, while `axi_gpio_0`/
+  `axi_gpio_1` (both mapped through the same interconnect) kept working
+  fine -- so it's specific to that one AXI SMC port, not the whole
+  fabric. A subsequent **JTAG-only PL reprogram** (no further Linux
+  reboot) immediately restored it. Root cause not fully pinned down,
+  but the practical rule going forward: after any `reboot` of this
+  board's Linux, reprogram the PL via JTAG once (even with the exact
+  same bitstream already loaded) before trusting `axi_bram_ctrl_0`.
+- **The 0x1000 receive-poll loop runs too fast for the arm-then-inject
+  ILA scripts' own timing**: arming a trigger on `A_full==0x1008` then
+  injecting via a separate SSH round-trip (as `capture_afull_arm_
+  inject*.tcl` all do) reliably triggers almost immediately on the
+  very next *natural* poll pass, long before the SSH injection
+  command actually lands -- so captures taken this way mostly show
+  ordinary baseline polls (`DA=0`), not the post-injection state. Not
+  a correctness problem for the `dbg_D` fix itself (confirmed by other
+  means above), but worth fixing in the capture scripts (e.g. trigger
+  on a signal that only changes as a result of the injection, or
+  inject first from a separate already-open channel and arm
+  immediately after) before trusting a future `0x1017`-reached test.
+- **`sshpw.py` only ever sent the login password once per invocation**,
+  so a single spurious rejection (observed right after this board's
+  reboot -- the very first password attempt failed, for reasons not
+  determined, though the root password had also apparently drifted
+  from the documented value and was reset back to it via the serial
+  console) left every retry prompt unanswered forever. Fixed to resend
+  on every `password:` prompt it sees, not just the first.
+

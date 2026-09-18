@@ -13,7 +13,6 @@ pid, fd = pty.fork()
 if pid == 0:
     os.execvp(argv[0], argv)
 else:
-    sent = False
     buf = b""
     while True:
         try:
@@ -30,9 +29,13 @@ else:
             sys.stdout.buffer.write(data)
             sys.stdout.buffer.flush()
             buf += data
-            if not sent and b"assword:" in buf:
+            # Resend on every "password:" prompt, not just the first
+            # -- a single spurious rejection (e.g. right after a
+            # fresh board reboot) used to leave this hanging forever
+            # on the retry prompt, since it only ever sent the
+            # password once per whole invocation.
+            if b"assword:" in buf:
                 os.write(fd, (password + "\n").encode())
-                sent = True
                 buf = b""
         pid_done, status = os.waitpid(pid, os.WNOHANG)
         if pid_done != 0:
