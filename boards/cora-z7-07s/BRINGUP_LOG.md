@@ -1937,3 +1937,84 @@ baud rate), or further careful real-hardware disassembly/tracing to
 locate the actual receive handler precisely before guessing at its
 behavior further.
 
+## 2026-09-18: the real receive handler found, DA-clear-on-read fixed, and the actual root cause -- INP never really loaded D
+
+The session that finally locates the receive handler and finds why
+`DA` injection never worked: not a UART-modeling problem at all, but a
+one-cycle timing bug in the CDP1802 core's own `INP` instruction.
+
+**Located the real receive-check routine** by grepping the ROM for
+`ANI 01` (testing `DA`, bit 0) preceded by an `INP 4` -- found at
+`0x1000`, with three sibling polling routines at `0x1040` (TX/`THRE`
+check), `0x1070` and `0x10B0` (port B's RX/TX checks) -- a clean
+round-robin structure matching the oscilloscope's ~680Hz continuous
+polling finding exactly. Decoded in full (see commit history), using
+the `SEX`/`DIS`/`RET`/`OUT`/`INP`-when-`X=P` inline-operand-consumption
+convention established over the past few sessions:
+
+```
+1000: SEX R2  1001: SEQ  1002: SEX R3  1003: DIS 33  1005: OUT1 0x02
+1007: SEX R2  1008: INP 4  1009: PHI RF  100A: SEX R3  100B: RET 23
+100D: ANI 01  100F: BZ 0x29 (skip if no data) ... 1017: INP 4 (real read)
+```
+
+**`cdp1854.vhd`: `DA` never cleared on read, fixed.** The model had
+`status_reg(0) <= rx_data_available` -- a pure external level-follow,
+with zero dependency on whether the CPU had ever actually read the
+data (real datasheet: `DA` clears specifically on "Read of Data" at
+TPB). Added a real `da_reg`/`rx_holding_reg` latch pair: sets on a
+rising edge of `rx_data_available`, clears only on a genuine CPU read
+of the Data register. Confirmed via real hardware: the CPU's own
+`INP4` at `0x1008` genuinely read `0xC1` (`DA=1`) after an injected
+keystroke -- or so it seemed (see below).
+
+**New mystery, then the real bug**: even with `DA` reading correctly,
+`ANI 01`/`BZ 0x29` at `0x100D`/`0x100F` kept taking the "no data"
+branch. Added a real `dbg_D` probe (tapping `cdp1802.vhd`'s `D_out`,
+the ALU's own accumulator register -- threaded through
+`cs1800_cpu.vhd`/`cs1800.vhd`/`cs1800_prcx18_top.vhd`, wired as ILA
+probe19) to observe `D` directly for the first time, instead of
+inferring it from `INP`'s own `M(R(X))` memory-write side effect or
+from `dbg_uart_status`. **Direct observation: `D` stays `0x00` through
+the entire `0x1008`-`0x100F` window, even during the exact machine
+cycle where `INP4` visibly writes `0xC0` onto the bus into `M(R2)`.**
+The memory-write side effect and `D` are not the same value -- the
+earlier "`D=0xC1` confirmed" conclusion was an artifact of trusting the
+write side effect as a proxy for `D`, which turned out to be wrong.
+
+**Root cause, in `instr.vhd`'s `INP` decode**: every other multi-cycle
+memory instruction in this file (`LDN`, `LDXA`, `ADC`, `OUT`, ...)
+asserts its `Do_MRD`/`Do_MWR` strobe *unconditionally* for the whole
+instruction, then latches (`wr_D`, etc.) at one specific `clk_cnt`
+sub-state, relying on the strobe still being held when the latch
+fires. `INP` was the one exception: `Do_MWR` was scoped to a single
+`clk_cnt="011"` pulse, and `wr_D` (`BUS -> D`) fired a full `clk_cnt`
+later, at `"100"` -- by which point `Do_MWR` (and therefore the real
+CDP1854's `nOE`, which is wired directly to `nMWR` in
+`cs1800_prcx18_top.vhd` for exactly this "device drives the bus during
+its own memory-write side effect" reason) had already gone back
+inactive. `wr_D` ended up latching a floating/stale bus value (`0x00`)
+instead of the device's byte, even though `M(R(X))` had already been
+correctly written with the real value one cycle earlier. Real 1802
+INP does `BUS -> D` and `BUS -> M(R(X))` *simultaneously* -- this
+model split them a cycle apart, and only a device whose bus-drive is
+gated tightly to the write strobe (like the real CDP1854 model, unlike
+`cs1800.vhd`'s built-in always-driving-when-selected dummy test
+peripheral) ever exposed it. That's also why the existing GHDL
+golden-reference regression never caught this: its own `INP` test uses
+that dummy peripheral, which keeps driving the bus long after the
+write strobe drops, masking the bug completely.
+
+**Fix**: hold `Do_MWR` unconditionally for the whole `INP` instruction
+(matching every sibling instruction's `Do_MRD`/`Do_MWR` pattern
+exactly), so the addressed device is still driving the bus when `wr_D`
+latches at `clk_cnt="100"`. Verified: full GHDL golden-reference
+regression -- only one line differs in each of `tb_cdp18_tpb.txt`/
+`tb_cs1800_tpb.txt` (622/526 lines each), and it's exactly the
+pre-existing `INP`-from-dummy-peripheral test at ROM address `0x0100`
+(reads the dummy device's fixed `0xC5` pattern) -- the `nMWR` field at
+that one TPB sample now correctly shows asserted (it was already back
+to inactive before), with zero other differences anywhere in either
+trace. This is the expected, correct consequence of the fix, not a
+regression -- reference dumps updated and committed alongside it.
+

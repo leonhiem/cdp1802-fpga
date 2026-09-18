@@ -479,10 +479,34 @@ BEGIN
                   ELSIF N_out(3) = '1' THEN -- 0x6N (N=9-F) : INP
                       v.XtoR := '1'; -- Select R(X)
                       v.N_addr_out := N_out(2 DOWNTO 0);
+                      -- Real hardware bug found 2026-09-18 (see
+                      -- boards/cora-z7-07s/BRINGUP_LOG.md): Do_MWR used
+                      -- to be scoped to clk_cnt="011" only, one cycle
+                      -- before wr_D's clk_cnt="100" -- but every other
+                      -- multi-cycle memory instruction in this file
+                      -- (LDN, LDXA, ADC, OUT, ...) asserts its Do_MRD/
+                      -- Do_MWR *unconditionally* for the whole
+                      -- instruction, precisely so the addressed device
+                      -- is still driving the bus whenever a later
+                      -- clk_cnt latches from it. INP was the one
+                      -- outlier: its device (an external I/O chip, not
+                      -- this core's own memory) only drives the shared
+                      -- bus while Do_MWR/nMWR is actually asserted (see
+                      -- cdp1854.vhd/io_inp.vhd's nCS/nOE gating), so by
+                      -- the time wr_D fired one cycle after Do_MWR had
+                      -- already dropped, D_in was already floating/
+                      -- stale (observed as D silently staying 0x00
+                      -- after a real CDP1854 INP, real hardware, despite
+                      -- the correct byte visibly reaching M(R(X))).
+                      -- Holding Do_MWR unconditionally (matching every
+                      -- read-side sibling) keeps the device's output
+                      -- alive through wr_D's own clk_cnt, so D and
+                      -- M(R(X)) are loaded from the exact same bus
+                      -- sample -- real INP: "BUS -> D; BUS -> M(R(X))"
+                      -- simultaneously, not one cycle apart.
+                      v.Do_MWR := '1';
                       IF clk_cnt = "000" THEN
                           v.wr_A := '1'; -- R(X) -> A
-                      ELSIF clk_cnt = "011" THEN
-                          v.Do_MWR := '1';
                       ELSIF clk_cnt = "100" THEN
                           v.wr_D := '1'; -- BUS -> D
                       END IF;
