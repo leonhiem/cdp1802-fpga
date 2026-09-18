@@ -99,24 +99,44 @@
 --   already flags this, benignly: "Width mismatch...ram_b_addr(16) to
 --   bram_addr_a(14) -- only lower order bits will be connected").
 --
---   The CPU's own 64KB address space is real and NEVER reduced by any
---   of this -- but this module's own decode is intentionally minimal,
---   not a full 16-bit compare (see eff_is_rom/a_is_rom below): only
---   bits 15:13 are checked, and only to pick ROM (`a_address(15
---   downto 13)="000"`, the bottom 8KB) vs "everything else" (RAM,
---   indexed by just `a_address(12 downto 2)`, 11 bits). That means any
---   address with bits 15:13 not all zero -- 0x2000, 0x4000, 0x8000,
---   0xC000, etc. -- all alias onto the exact same physical 8KB RAM
---   array, not eight distinct 8KB banks. The CPU can genuinely drive
---   any of its 65536 addresses and always gets *something* back (ROM
---   or that one RAM bank); it just doesn't distinguish most of that
---   space into separate real memory. This matches real vintage
---   hardware practice (a handful of high address bits decoded, not a
---   full compare) and was an accepted simplification for this
---   bring-up milestone -- enough real, distinctly-addressed memory
---   (8KB ROM + 8KB RAM) for PRCX-18 to boot to its console prompt, not
---   a claim that the other ~48KB of the CPU's address space is
---   somehow unavailable to it.
+--   Real full 16-bit chip-select decode, 2026-09-18 (see
+--   boards/cora-z7-07s/BRINGUP_LOG.md's RAM-aliasing investigation):
+--   this used to be a minimal 2-region decode (only bits 15:13 checked,
+--   just enough to pick ROM vs "everything else is RAM, indexed by the
+--   low bits alone") -- meaning ANY address with bits 15:13 not all
+--   zero (0x2000, 0x4000, 0x8000, 0xC000, etc.) aliased onto the exact
+--   same physical RAM bytes. That was a real, confirmed bug, not a
+--   harmless simplification: PRCX-18's own boot-time RAM-sizing sweep
+--   (a classic write-then-readback probe) is fooled by aliasing into
+--   believing it has the full 64KB the real machine can have, then
+--   allocates its own real, distinct-looking data structures (task
+--   control blocks, buffers) across that whole believed range --
+--   silently corrupting each other whenever two such allocations
+--   shared the same low address bits (confirmed directly: a per-task
+--   "already running" flag at 0xFBD0 was being clobbered by unrelated
+--   writes to 0x3BD0/0x7BD0/0xBBD0, all the same physical byte,
+--   spuriously respawning PRCX-18's own Console Task over and over).
+--
+--   Per the user (who owns the real backplane and confirmed this from
+--   the real memory board schematic): the real hardware works
+--   correctly even in this same minimal 8KB ROM + 8KB RAM
+--   configuration, because its address decode uses all 16 address
+--   lines properly -- a chip's chip-select is only ever active within
+--   its own actual installed range; every other address is genuinely
+--   unmapped (no chip drives the bus at all), never aliased onto a
+--   populated chip. `eff_is_rom`/`a_is_rom` (ROM, 0x0000-0x1FFF) now
+--   has a sibling `eff_is_ram_valid`/`a_is_ram_valid` (RAM, exactly
+--   `c_rom_size` to `c_rom_size + g_ram_words*4 - 1` -- i.e. starting
+--   right after ROM, sized to whatever g_ram_words actually is, not a
+--   moment longer). Anything in neither range is genuinely unmapped:
+--   Port A writes there are silently discarded (same as a real EPROM's
+--   WE pin doing nothing) and reads return a fixed `c_unmapped_byte`
+--   pattern instead of real memory content -- not a guess at any
+--   *specific* real open-bus value (that would depend on the real
+--   bus's actual pull-up/pull-down/capacitive behavior, not modeled
+--   here), just a fixed, non-aliasing placeholder that reliably fails
+--   PRCX-18's own write-then-readback RAM-sizing probe at the correct,
+--   real boundary instead of always succeeding.
 --
 -------------------------------------------------------------------------------
 
@@ -170,6 +190,18 @@ ARCHITECTURE str OF cs1800_prcx18_memory IS
   -- needs a real divider.
   CONSTANT c_ram_addr_bits : INTEGER := integer(round(log2(real(g_ram_words))));
 
+  -- Real chip-select range for RAM: starts right after ROM, sized to
+  -- whatever g_ram_words actually is -- see this file's header. A
+  -- plain range compare (not a bit-pattern match) so this stays
+  -- correct for any power-of-two g_ram_words without further changes.
+  CONSTANT c_ram_base  : unsigned(15 DOWNTO 0) := to_unsigned(c_rom_size, 16);
+  CONSTANT c_ram_top   : unsigned(15 DOWNTO 0) := to_unsigned(c_rom_size + g_ram_words*4 - 1, 16);
+
+  -- Fixed value returned for a genuinely unmapped Port A read -- see
+  -- this file's header for why this is a placeholder, not a claim
+  -- about the real bus's actual open-bus voltage.
+  CONSTANT c_unmapped_byte : STD_LOGIC_VECTOR(7 DOWNTO 0) := X"FF";
+
   TYPE t_word_array IS ARRAY (NATURAL RANGE <>) OF STD_LOGIC_VECTOR(31 DOWNTO 0);
 
   -- Packs test_program_pkg's byte array into 32-bit words, little-
@@ -211,25 +243,26 @@ ARCHITECTURE str OF cs1800_prcx18_memory IS
   SIGNAL eff_ram_idx : NATURAL RANGE 0 TO g_ram_words - 1;
   SIGNAL eff_idx     : NATURAL RANGE 0 TO c_mem_words - 1;
 
-  SIGNAL a_is_rom : STD_LOGIC;
+  SIGNAL a_is_rom       : STD_LOGIC;
+  SIGNAL a_is_ram_valid : STD_LOGIC;
 
   -- Port A's registered read state -- see the read process below.
-  SIGNAL a_word_reg : STD_LOGIC_VECTOR(31 DOWNTO 0);
-  SIGNAL a_lane_reg : STD_LOGIC_VECTOR(1 DOWNTO 0);
-  SIGNAL a_sel_reg  : STD_LOGIC;
+  SIGNAL a_word_reg     : STD_LOGIC_VECTOR(31 DOWNTO 0);
+  SIGNAL a_lane_reg     : STD_LOGIC_VECTOR(1 DOWNTO 0);
+  SIGNAL a_sel_reg      : STD_LOGIC;
+  SIGNAL a_unmapped_reg : STD_LOGIC;
 
   -- Port B's registered read state -- see the read process below.
   SIGNAL b_dout_reg : STD_LOGIC_VECTOR(31 DOWNTO 0);
 
 BEGIN
 
-  -- Minimal 2-region decode, not a full 16-bit compare -- see this
-  -- file's header ("Why Port B is 32-bit/14-bit...") for the full
-  -- explanation: bits 15:13="000" is the bottom 8KB (ROM), anything
-  -- else is RAM, indexed by bits 12:2 alone -- so 0x2000/0x4000/0x8000/
-  -- 0xC000/etc. all alias onto the same physical 8KB RAM, not distinct
-  -- banks. The CPU's own 64KB address space is unrestricted; only this
-  -- module's decode is intentionally this minimal.
+  -- Real full 16-bit chip-select decode -- see this file's header.
+  -- Port B (our own runtime ROM-loading path from Linux, not a real
+  -- chip) is left unrestricted -- eff_is_rom/eff_ram_idx below only
+  -- matter for Port B in the sense that they still correctly place a
+  -- byte within ROM vs RAM; Port B never needs the "genuinely
+  -- unmapped" concept since it doesn't model a real bus device.
   eff_addr    <= b_addr WHEN sel_ext = '1' ELSE a_address;
   eff_is_rom  <= '1' WHEN eff_addr(15 DOWNTO 13) = "000" ELSE '0';
   eff_rom_idx <= to_integer(unsigned(eff_addr(12 DOWNTO 2)));
@@ -241,12 +274,16 @@ BEGIN
 
   eff_data <= b_din WHEN sel_ext = '1' ELSE a_data_in & a_data_in & a_data_in & a_data_in;
 
-  -- Port A may only ever write RAM (a_is_rom below gates that); Port B
-  -- may write either region (that's how the ROM image gets loaded).
-  a_is_rom <= '1' WHEN a_address(15 DOWNTO 13) = "000" ELSE '0';
+  -- Port A may only ever write its own real, in-range RAM -- neither
+  -- ROM (a real EPROM's WE pin does nothing) nor anything genuinely
+  -- unmapped (no real chip there to write to either). Port B may write
+  -- either region (that's how the ROM image gets loaded) -- it doesn't
+  -- model a real bus device, see above.
+  a_is_rom       <= '1' WHEN a_address(15 DOWNTO 13) = "000" ELSE '0';
+  a_is_ram_valid <= '1' WHEN (unsigned(a_address) >= c_ram_base AND unsigned(a_address) <= c_ram_top) ELSE '0';
 
   eff_we <= b_we WHEN sel_ext = '1' ELSE
-            "0000" WHEN a_is_rom = '1' ELSE
+            "0000" WHEN a_is_ram_valid = '0' ELSE
             "0001" WHEN (a_nCS = '0' AND a_nWE = '0' AND a_address(1 DOWNTO 0) = "00") ELSE
             "0010" WHEN (a_nCS = '0' AND a_nWE = '0' AND a_address(1 DOWNTO 0) = "01") ELSE
             "0100" WHEN (a_nCS = '0' AND a_nWE = '0' AND a_address(1 DOWNTO 0) = "10") ELSE
@@ -282,20 +319,25 @@ BEGIN
   PROCESS (clk) IS
     VARIABLE rom_idx : NATURAL RANGE 0 TO c_rom_words - 1;
     VARIABLE ram_idx : NATURAL RANGE 0 TO g_ram_words - 1;
-    VARIABLE idx     : NATURAL RANGE 0 TO c_mem_words - 1;
   BEGIN
     IF rising_edge(clk) THEN
       IF (a_nCS = '0' AND a_nOE = '0') THEN
-        rom_idx := to_integer(unsigned(a_address(12 DOWNTO 2)));
-        ram_idx := to_integer(unsigned(a_address(c_ram_addr_bits + 1 DOWNTO 2)));
-        IF a_is_rom = '1' THEN
-          idx := rom_idx;
-        ELSE
-          idx := c_rom_words + ram_idx;
-        END IF;
-        a_word_reg <= mem(idx);
-        a_lane_reg <= a_address(1 DOWNTO 0);
         a_sel_reg  <= '1';
+        a_lane_reg <= a_address(1 DOWNTO 0);
+        IF a_is_rom = '1' THEN
+          rom_idx        := to_integer(unsigned(a_address(12 DOWNTO 2)));
+          a_word_reg     <= mem(rom_idx);
+          a_unmapped_reg <= '0';
+        ELSIF a_is_ram_valid = '1' THEN
+          ram_idx        := to_integer(unsigned(a_address(c_ram_addr_bits + 1 DOWNTO 2)));
+          a_word_reg     <= mem(c_rom_words + ram_idx);
+          a_unmapped_reg <= '0';
+        ELSE
+          -- Genuinely unmapped -- see this file's header. a_word_reg's
+          -- own value doesn't matter here (a_unmapped_reg overrides it
+          -- in a_data_out below), so it's simply left unchanged.
+          a_unmapped_reg <= '1';
+        END IF;
       ELSE
         a_sel_reg <= '0'; -- chip not selected / not reading
       END IF;
@@ -303,6 +345,7 @@ BEGIN
   END PROCESS;
 
   a_data_out <= (OTHERS => '0') WHEN a_sel_reg = '0' ELSE
+                c_unmapped_byte          WHEN a_unmapped_reg = '1' ELSE
                 a_word_reg(7 DOWNTO 0)   WHEN a_lane_reg = "00" ELSE
                 a_word_reg(15 DOWNTO 8)  WHEN a_lane_reg = "01" ELSE
                 a_word_reg(23 DOWNTO 16) WHEN a_lane_reg = "10" ELSE
