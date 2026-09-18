@@ -348,6 +348,18 @@ BEGIN
   u_uart_a : ENTITY work.cdp1854
   PORT MAP (
     clk      => tpb_i,
+    -- Real hardware reset source, per the user's own schematic reading
+    -- 2026-09-18: PRCX-18 resets the CDP1854 itself, early in boot, via
+    -- OUT 11 (N=1, Q=1) toggling bit 7 of the CD4076 latch
+    -- (cs1800_io_select.vhd's io_sel_reg -- already captured, just
+    -- never connected to anything downstream until now). Bit 7 drives
+    -- the real chip's pin 21 (nMR, Master Reset) through an inverter,
+    -- so bit7=1 -> nMR=0 -> chip resets -- matching this port's own
+    -- active-high convention directly, no extra inversion needed.
+    -- Previously wired to ctrl_in(0) (the CPU's own system reset) --
+    -- wrong signal entirely, which is why that fix never took effect
+    -- on real hardware no matter how it was tested.
+    reset    => io_sel_reg(7),
     data_in  => ram_wdata,
     data_out => uart_a_dout,
     nCS  => uart_a_nsel,

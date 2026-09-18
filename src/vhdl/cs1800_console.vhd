@@ -196,6 +196,7 @@ BEGIN
   u_uart_a : ENTITY work.cdp1854
   PORT MAP (
     clk      => tpb_i,
+    reset    => reset,
     data_in  => data_i,
     data_out => uart_a_dout,
     nCS  => uart_a_nsel,
@@ -212,6 +213,7 @@ BEGIN
   u_uart_b : ENTITY work.cdp1854
   PORT MAP (
     clk      => tpb_i,
+    reset    => reset,
     data_in  => data_i,
     data_out => uart_b_dout,
     nCS  => uart_b_nsel,
