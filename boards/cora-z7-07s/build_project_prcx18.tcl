@@ -117,15 +117,26 @@ set cs1800_prcx18_top_0 [create_bd_cell -type module -reference cs1800_prcx18_to
 # 50 Hz LC at CLOCK = 4 MHz (real speed, see the CLOCK freq change
 # above) -- half period = 4,000,000 * 0.01s = 40,000 cycles.
 set_property CONFIG.g_lc_half_period {40000} $cs1800_prcx18_top_0
-# g_ram_words left at its entity default (256 = 1KB) -- see
-# cs1800_prcx18_memory.vhd's header for the full story: the original
-# 384-word (1.5KB, non-power-of-two) choice caused a real hardware-only
-# address-decode bug (a modulo divider glitching the combinational read
-# path); fixed by requiring a power of two, which also drops capacity
-# a bit. Still functionally short of what PRCX-18 needs to fully start
-# its Console Task (2KB does, but doesn't fit the ~6000-LUT budget --
-# ~102%). Building at 1KB anyway, deliberately, now that it's at least
-# deterministic, to watch the real boot behavior on actual hardware.
+# g_ram_words bumped to 16384 (64KB) 2026-09-18 -- see
+# cs1800_prcx18_memory.vhd's header for the RAM-aliasing story this
+# fixes: with the previous 2048-word (8KB) size, only address bits
+# [12:2] were used to index RAM, so 0x2000/0x6000/0xA000/0xE000-based
+# addresses sharing the same low bits (e.g. 0x3BD0/0x7BD0/0xBBD0/0xFBD0)
+# all aliased onto the same physical byte -- a real, confirmed bug: the
+# real PRCX-18 ROM uses high memory addresses (e.g. 0xFBD0, apparently
+# a per-task "is this task already running" flag) as if it had the
+# real machine's full, distinct 64KB address space, and unrelated code
+# writing to an aliased low address was silently clobbering it,
+# spuriously re-triggering "-SYS-Starting Console Task-" respawns. This
+# note above is now stale re: a LUT-budget concern from an earlier
+# session (milestone 3m) that predates this design's move to real
+# Block RAM inference -- BRAM capacity on this device is not remotely
+# the constraint an 8-16KB choice was earlier. 16384 words = 64KB is
+# the smallest power of two that keeps address bit 15 significant in
+# the RAM index, eliminating this class of aliasing entirely (matches
+# Port B's own native 16-bit ram_b_addr width exactly, so no address
+# is left unreachable either way).
+set_property CONFIG.g_ram_words {16384} $cs1800_prcx18_top_0
 
 # --- Bit-slice/concat glue for axi_gpio_1's two 9-bit channels: get_bd_pins'
 # own [n:m] bit-range syntax collides with Tcl's own bracket parsing when
@@ -279,9 +290,11 @@ assign_bd_address -offset 0x41210000 -range 0x00001000 \
   -target_address_space [get_bd_addr_spaces processing_system7_0/Data] \
   [get_bd_addr_segs axi_gpio_1/S_AXI/Reg] -force
 
-# 16KB range (matching this design's real 8KB ROM + 4KB RAM, rounded up
-# to a clean power of two) -- addresses beyond that alias.
-assign_bd_address -offset 0x40000000 -range 0x00004000 \
+# 64KB range, matching Port B's own native 16-bit ram_b_addr width
+# exactly (see g_ram_words note above -- the real 8KB ROM plus the now
+# full-64KB-addressable RAM together cover the CPU's entire real
+# address space with no aliasing).
+assign_bd_address -offset 0x40000000 -range 0x00010000 \
   -target_address_space [get_bd_addr_spaces processing_system7_0/Data] \
   [get_bd_addr_segs axi_bram_ctrl_0/S_AXI/Mem0] -force
 
