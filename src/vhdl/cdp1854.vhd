@@ -39,12 +39,25 @@
 --     - The Control Register's individual fields (word length, parity,
 --       stop bits, IE, BREAK, TR) are latched but not otherwise acted
 --       on -- nothing in this model's behavior depends on them yet.
---     - The receive side is a stub for future extension: rx_data/
---       rx_data_available are plain inputs (tie rx_data_available='0' if
---       unused), so a testbench can inject received characters later
---       without changing this entity. OE/PE/FE/ES/PSI (Status Register
---       bits 1/2/3/4/5) are tied low -- no error/modem-status conditions
---       are modeled.
+--     - The receive side latches on a rising edge of rx_data_available
+--       (a real byte "just arrived" event -- see p_receive below) into
+--       an internal Receiver Holding Register/DA flip-flop, cleared on
+--       a genuine CPU read of the Data register (rsel='0'), matching
+--       the real datasheet's own "DA cleared by: read of Data, TPB
+--       leading edge" rule (Table 1) -- fixed 2026-09-18 after real
+--       hardware testing (see BRINGUP_LOG.md) found the previous plain
+--       level-follow (status_reg(0) <= rx_data_available, no read-
+--       clear at all) meant an external hold longer than the CPU's own
+--       read-and-move-on time made every subsequent ~680Hz poll see
+--       "another new byte" indefinitely, causing real, reproducible
+--       disruption on real hardware (Console Task restarts, output
+--       corruption) -- not evidence PRCX-18 ignores DA, just a missing
+--       clear-on-read in this model. OE/PE/FE/ES/PSI (Status Register
+--       bits 1/2/3/4/5) are still tied low -- no error/modem-status
+--       conditions are modeled (in particular, a second
+--       rx_data_available edge arriving before the first is read does
+--       NOT set OE here, unlike a real chip -- deliberately out of
+--       scope for now).
 --
 -- FPGA note: clocked on tpb (mapped to the "clk" port here), matching
 -- this codebase's existing io_out.vhd convention for IO peripherals --
@@ -137,9 +150,16 @@ ARCHITECTURE str OF cdp1854 IS
 
   SIGNAL tx_data_valid_i : STD_LOGIC := '0';
 
+  -- Receiver Holding Register + DA flip-flop -- see file header and
+  -- p_receive below. da_reg (not the raw rx_data_available input) is
+  -- what status_reg(0) actually reflects.
+  SIGNAL rx_holding_reg      : STD_LOGIC_VECTOR(7 DOWNTO 0) := (OTHERS => '0');
+  SIGNAL da_reg              : STD_LOGIC := '0';
+  SIGNAL rx_data_available_d : STD_LOGIC := '0'; -- one-cycle-delayed, for edge detect
+
 BEGIN
 
-  status_reg(0) <= rx_data_available; -- DA
+  status_reg(0) <= da_reg; -- DA
   status_reg(1) <= '0';               -- OE
   status_reg(2) <= '0';               -- PE
   status_reg(3) <= '0';               -- FE
@@ -165,6 +185,32 @@ BEGIN
 
   tx_data_valid <= tx_data_valid_i;
 
+  -- Receiver Holding Register + DA: latch on a rising edge of
+  -- rx_data_available (a real byte "just arrived" event), clear only
+  -- on a genuine CPU read of the Data register -- see file header.
+  -- Both conditions are checked at the same TPB-driven clock this
+  -- whole entity already uses, matching the datasheet's "TPB leading
+  -- edge" clear timing exactly. If both happen on the same edge (an
+  -- edge arriving in the same cycle as a read), the new arrival wins
+  -- (DA stays set) -- an edge case that can't actually occur from
+  -- this model's own external injection protocol (set-then-clear is
+  -- always a separate, later write), listed here for completeness.
+  p_receive : PROCESS (clk) IS
+  BEGIN
+    IF rising_edge(clk) THEN
+      rx_data_available_d <= rx_data_available;
+
+      IF nCS = '0' AND nOE = '0' AND rsel = '0' THEN
+        da_reg <= '0';
+      END IF;
+
+      IF rx_data_available = '1' AND rx_data_available_d = '0' THEN
+        rx_holding_reg <= rx_data;
+        da_reg         <= '1';
+      END IF;
+    END IF;
+  END PROCESS;
+
   dbg_control_reg <= control_reg;
   dbg_status_reg  <= status_reg;
 
@@ -172,14 +218,14 @@ BEGIN
   -- only -- see nINT's own port comment above for why THRE is excluded.
   nINT <= '0' WHEN (control_reg(5) = '1' AND status_reg(0) = '1') ELSE '1';
 
-  p_read : PROCESS (nCS, nOE, rsel, rx_data, status_reg) IS
+  p_read : PROCESS (nCS, nOE, rsel, rx_holding_reg, status_reg) IS
   BEGIN
     data_out <= (OTHERS => '0');
     IF nCS = '0' AND nOE = '0' THEN
       IF rsel = '1' THEN
         data_out <= status_reg;
       ELSE
-        data_out <= rx_data;
+        data_out <= rx_holding_reg;
       END IF;
     END IF;
   END PROCESS;
