@@ -115,6 +115,18 @@ ENTITY cs1800_prcx18_top IS
     -- directly in this design.
     dbg_rsel : OUT STD_LOGIC;
 
+    -- Reliable address visibility, 2026-09-18: dbg_ram_addr (already
+    -- wired to the ILA as probe0) is the OLD, known-unreliable
+    -- TPA-multiplexed reconstruction (see cs1800_prcx18_memory.vhd's
+    -- header and this project's whole "milestone 3f/3k" history for
+    -- why -- it's only valid part of each machine cycle by
+    -- construction). This taps a_full_i directly instead -- the same
+    -- signal cs1800_prcx18_memory's Port A actually uses for real
+    -- addressing -- so address-based ILA triggers/traces (like the
+    -- 0x1000/0x1017 receive-handler hunt) can be trusted without the
+    -- multiplexing artifacts.
+    dbg_a_full : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
+
     -- cs1800_prcx18_memory Port B: native BRAM-style port for axi_bram_ctrl.
     ram_b_addr : IN  STD_LOGIC_VECTOR(15 DOWNTO 0);
     ram_b_din  : IN  STD_LOGIC_VECTOR(31 DOWNTO 0);
@@ -282,6 +294,7 @@ BEGIN
   dbg_Q    <= Q;
   dbg_nEF2 <= nEF_i(1);
   dbg_rsel <= io_sel_reg(1);
+  dbg_a_full <= a_full_i;
 
   dbg_ram_addr <= ram_addr;
   dbg_data     <= ram_wdata;
