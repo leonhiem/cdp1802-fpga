@@ -15,7 +15,11 @@
 # bus); a separate memory image (ROM file + logged writes) cross-checks
 # memory reads so memory-side bugs show up too.
 #
-# Usage: lockstep1802.py <rom.bin> <cyc.log> [max_errors]
+# Usage: lockstep1802.py [--flat] <rom.bin> <cyc.log> [max_errors]
+#   default: the Cora/CS1800 map -- ROM 0x0000-0x1FFF, RAM 0x4000-0x5FFF,
+#            everything else void (reads must return 0xFF)
+#   --flat : one 64 KB RAM holding <rom.bin> at 0x0000, rest 0x00
+#            (tb/vhdl/tb_cdp1802_alu.vhd)
 
 import sys
 
@@ -77,13 +81,22 @@ class CPU:
 
 
 def main():
-    rom = open(sys.argv[1], 'rb').read()
-    cyc = group_cycles(load_events(sys.argv[2]))
-    max_err = int(sys.argv[3]) if len(sys.argv) > 3 else 10
+    global ROM_END, RAM_LO, RAM_HI
+    args = sys.argv[1:]
+    flat = '--flat' in args
+    args = [a for a in args if a != '--flat']
+    rom = open(args[0], 'rb').read()
+    cyc = group_cycles(load_events(args[1]))
+    max_err = int(args[2]) if len(args) > 2 else 10
 
     mem = {}
-    for i, b in enumerate(rom[:ROM_END]):
-        mem[i] = b
+    if flat:
+        ROM_END, RAM_LO, RAM_HI = 0, 0x0000, 0xFFFF
+        for i in range(0x10000):
+            mem[i] = rom[i] if i < len(rom) else 0
+    else:
+        for i, b in enumerate(rom[:ROM_END]):
+            mem[i] = b
 
     c = CPU()
     errors = 0

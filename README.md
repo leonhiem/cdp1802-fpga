@@ -180,6 +180,28 @@ cycles changed (`time addr data nMRD nMWR Q SC`, one line per TPB).
 Only commit the new reference once you've explained every changed line.
 For example, the SHRC/SHLC fix legitimately changed four lines.
 
+### Layer 1b: exhaustive ALU test (~20 minutes on 12 cores, no ROM, no hardware)
+
+```
+sim/ghdl/alu/run_alu_exhaustive.sh          # all 22 ALU instructions
+sim/ghdl/alu/run_alu_exhaustive.sh 76 7E    # just some (opcodes in hex)
+```
+
+This runs each ALU instruction (ADD, ADC, SD, SDB, SM, SMB, OR, AND, XOR,
+their immediate forms, SHR, SHL, SHRC, SHLC) on the bare core
+(`tb/vhdl/tb_cdp1802_alu.vhd`) over every combination of D (256) x
+operand (256) x DF (2). The resulting D and DF of every case are checked
+by the lockstep model (`lockstep1802.py --flat`), so no table of expected
+values is involved. The simulations run in parallel (`JOBS=n` to set how
+many), and only one run at a time is allowed (a lock file guards the
+shared run directory). Pass = `PASS: all 22 ALU instructions match the reference model
+exhaustively`. On a failure, `sim/ghdl/alu/run/<opcode>.check` shows the
+first wrong result, for example the old SHRC bug:
+
+```
+*** MISMATCH #1 at cycle 47: STR R7: expected write M(0100)<=80, got M(0100)<=00
+```
+
 ### Layer 2: real-ROM lockstep check (~10 minutes, needs your ROM dump)
 
 ```

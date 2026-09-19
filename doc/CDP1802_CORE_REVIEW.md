@@ -239,13 +239,25 @@ See bug 3 above.
 ### TODO 2: tests that prove the core correct
 The lockstep run proves the instructions PRCX-18 uses. To prove the rest:
 
-1. **Exhaustive ALU test (highest value).** A small 1802 program that
-   runs every ALU instruction over all operand combinations: ADD, ADC,
-   SD, SDB, SM, SMB, their immediate forms, OR/AND/XOR (+I), SHR/SHL/
-   SHRC/SHLC, for all 256 D x 256 M x DF=0/1, storing each result and DF
-   to memory. That's about 2.2M results, which simulates in minutes. The
-   lockstep model checks every stored byte, so no expected-value table
-   is needed. Bug 2 would have been caught immediately.
+1. **Exhaustive ALU test -- done, all PASS.**
+   `sim/ghdl/alu/run_alu_exhaustive.sh` (README, "Layer 1b"). For each of
+   the 22 ALU instructions, `gen_alu_prog.py` generates a program that
+   runs it over all 256 D x 256 operand x 2 DF combinations (shifts: 256
+   D x 2 DF). The operand is M(R(X)) for the memory forms and a
+   self-modified immediate byte for the immediate forms. After every
+   case the result D is stored (`STR`) and DF selects a `BDF` branch, so
+   both are visible on the bus. `tb/vhdl/tb_cdp1802_alu.vhd` runs the
+   program on the bare core with a flat 64 KB memory, and
+   `lockstep1802.py --flat` checks every stored byte and every branch.
+   Result: **2,361,344 cases, 0 mismatches** (18 memory/immediate
+   instructions x 131,072 + 4 shifts x 512; about 920,000 instructions
+   checked per instruction; 18 minutes on 11 parallel GHDL jobs).
+   Mutation check: with the old SHRC/SHLC code put back, `76` and `7E`
+   fail on their first case while the other shifts pass, so the test
+   does detect this class of bug.
+   Caveat: "correct" here means "agrees with `lockstep1802.py`'s ALU
+   definitions", which were written from the datasheet independently of
+   `alu.vhd`, but by one person (me). See item 8.
 2. **Coverage-driven instruction tests.** Still unexercised by PRCX-18:
    `IDL` (00), `IRX` (60), `LDN`/`INC`/`DEC`/`LDA`/`STR`/`GLO`/`GHI`/
    `PHI`/`PLO`/`SEP`/`SEX` on several registers, `ADC`/`SDB`/`SMB`/
@@ -272,6 +284,13 @@ The lockstep run proves the instructions PRCX-18 uses. To prove the rest:
    loading), PAUSE mid-cycle, reset in the middle of an instruction.
 7. Put 1 and 2 into `sim/ghdl/run.sh` so they run on every change. That
    works without the copyrighted ROM, since they are our own programs.
+8. **Same programs on the real CS1800.** The ALU programs are plain 1802
+   code. A variant that accumulates a checksum (e.g. CRC-16) over all
+   results and DF values, instead of relying on the bus log, could run
+   on the user's real CDP1802 in the CS1800 rack and on the Cora. The
+   same checksum on the real chip, the Cora and the model would confirm
+   the model's ALU definitions against real silicon, closing the caveat
+   in item 1.
 
 ### TODO 3: maximum RAM size on the Cora (32 KB)
 64 KB of RAM does not fit (80 RAMB36 needed, 50 available on the
