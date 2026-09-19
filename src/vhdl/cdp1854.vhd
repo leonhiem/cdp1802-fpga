@@ -115,6 +115,13 @@ ENTITY cdp1854 IS
     tx_data       : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
     tx_data_valid : OUT STD_LOGIC;
 
+    -- Transmit back-pressure: drives THRE/TSRE. '1' (default) = always
+    -- ready, the old behaviour. A downstream byte sink with limited
+    -- room (e.g. a FIFO) pulls it low while full, so firmware that polls
+    -- THRE before each write (PRCX-18 does, ANI 80) waits, the way it
+    -- would for a real, slow serial line, instead of losing characters.
+    tx_ready      : IN STD_LOGIC := '1';
+
     -- Interrupt output (real chip's INT pin, open-drain active-low on
     -- the real hardware -- modeled here as an ordinary active-low
     -- output, matching nCS/nWE/nOE's convention). Per the datasheet
@@ -181,8 +188,8 @@ BEGIN
   status_reg(3) <= '0';               -- FE
   status_reg(4) <= '0';               -- ES
   status_reg(5) <= '0';               -- PSI
-  status_reg(6) <= '1';               -- TSRE (always empty -- see file header)
-  status_reg(7) <= '1';               -- THRE (always empty -- see file header)
+  status_reg(6) <= tx_ready;          -- TSRE (empty unless the sink is full -- see tx_ready)
+  status_reg(7) <= tx_ready;          -- THRE (empty unless the sink is full -- see tx_ready)
 
   p_write : PROCESS (clk, reset) IS
   BEGIN

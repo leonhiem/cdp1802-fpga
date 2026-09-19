@@ -2352,3 +2352,27 @@ ADDR   0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F       ASCII
 ```
 
 (Output is cut off only by the ~35 B/s devmem drain within the 90 s window.)
+
+## 2026-09-19: DMP output cut off after 256 bytes -- TX back-pressure added
+
+Using `interactive_console.sh` by hand, the user saw `DMP` stop mid-line
+at `4020 ... 00 0`, while short commands (`TSKL`) completed. My scripted
+test had stopped at exactly the same byte, so this was a fixed limit, not
+timing: the 256-byte TX FIFO. PRCX-18 polls THRE (`ANI 80`) before
+every character, but `cdp1854.vhd` hard-wired THRE/TSRE to 1. The whole
+dump (~1.3 KB) was sent in milliseconds, and with the devmem drain at
+~35 B/s everything past the first 256 bytes was dropped, including the
+closing prompt.
+
+Fix: `cdp1854.vhd` gets a `tx_ready` input (default `'1'` = the old
+behaviour, so `cs1800_console` etc. are unchanged) that drives THRE and
+TSRE. `byte_fifo.vhd` gets an `almost_full` output (fewer than 4 free
+slots), and `cs1800_prcx18_top.vhd` wires `tx_ready <= NOT almost_full`.
+PRCX-18 now simply waits, as it would for a slow real serial line.
+XON/XOFF (which PRCX-18 also supports) isn't needed for this.
+
+Verified: simulation (inject `DMP<CR>` after the prompt, drain one byte
+per 1000 clocks) gives the full 16-line dump `4000`-`40F0` plus the
+closing `_08> `, 1344 bytes, none lost. On the Cora (LC at 50 Hz),
+`<CR>` x3 + `DMP<CR>` gives the complete dump and the closing prompt,
+1368 bytes.

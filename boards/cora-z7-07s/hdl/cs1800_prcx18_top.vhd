@@ -223,6 +223,8 @@ ARCHITECTURE str OF cs1800_prcx18_top IS
   -- Edge-detected push pulse -- see p_tx_fifo_push below (milestone 3n).
   SIGNAL tx_fifo_push      : STD_LOGIC := '0';
   SIGNAL tx_fifo_push_prev : STD_LOGIC := '0';
+  SIGNAL tx_fifo_almost_full : STD_LOGIC;
+  SIGNAL uart_a_tx_ready     : STD_LOGIC;
 
 BEGIN
 
@@ -376,6 +378,7 @@ BEGIN
     rx_data_available => uart_rx_available,
     tx_data       => uart_a_tx_data_i,
     tx_data_valid => uart_a_tx_valid_i,
+    tx_ready      => uart_a_tx_ready,
     nINT          => uart_a_nint_i,
     dbg_control_reg => dbg_uart_control,
     dbg_status_reg  => dbg_uart_status
@@ -431,8 +434,16 @@ BEGIN
     push_data => uart_a_tx_data_i,
     pop       => tx_fifo_pop,
     head      => uart_tx_fifo_data,
-    avail     => uart_tx_fifo_avail
+    avail     => uart_tx_fifo_avail,
+    almost_full => tx_fifo_almost_full
   );
+
+  -- Back-pressure into the CDP1854's THRE/TSRE: the software drain
+  -- (devmem over AXI GPIO) empties this FIFO at only ~35 bytes/s, while
+  -- PRCX-18 would otherwise emit a whole DMP in milliseconds. Without
+  -- this, everything past the first 256 bytes was silently dropped
+  -- (a DMP "stalled" mid-line and its closing prompt never arrived).
+  uart_a_tx_ready <= NOT tx_fifo_almost_full;
 
   status_out <= "000000" & lc & Q;
 

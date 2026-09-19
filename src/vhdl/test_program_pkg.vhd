@@ -147,13 +147,13 @@ PACKAGE test_program_pkg IS
   -- ADD
   c_LDI,   -- 0x59: M(R(P))->D; R(P)+1
   X"F0",   -- 0x5A:
-  c_ADD,   -- 0x5B: M(R(X))+D -> DF, D : 0x3A + 0xF0 = 0x12A
+  c_ADD,   -- 0x5B: M(R(X))+D -> DF, D : 0x3B + 0xF0 = 0x12B
   c_INC_2, -- 0x5C: R(N)+1
   c_STR_2, -- 0x5D: D->M(R(N))(N=2) : addr M(R(2)) will be result of ADD
 
   -- ADI
   c_INC_2, -- 0x5E: R(N)+1
-  c_ADI,   -- 0x5F: M(R(P)) + D -> DF,D; R(P)+1 : result is 0x11A
+  c_ADI,   -- 0x5F: M(R(P)) + D -> DF,D; R(P)+1 : result is 0x11B
   X"F0",   -- 0x60:
   c_STR_2, -- 0x61: D->M(R(N))(N=2) : addr M(R(2)) will be result of ADI
 
@@ -249,8 +249,8 @@ PACKAGE test_program_pkg IS
   X"00", -- 0xA1: 0x00 : will be 0x0A after SHL
   X"00", -- 0xA2: 0x00 : will be 0xC2 after RSHR
   X"00", -- 0xA3: 0x00 : will be 0x3B after RSHL (0x1D << 1, DF=1 from RSHR shifted in)
-  X"00", -- 0xA4: 0x00 : will be 0x2A after ADD
-  X"00", -- 0xA5: 0x00 : will be 0x1A after ADI
+  X"00", -- 0xA4: 0x00 : will be 0x2B after ADD
+  X"00", -- 0xA5: 0x00 : will be 0x1B after ADI
   X"3A", -- 0xA6: 0x00 : will be 0x68 after ADC
   X"00", -- 0xA7: 0x00 : will be 0x58 after ADCI
 

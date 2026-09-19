@@ -61,7 +61,12 @@ ENTITY byte_fifo IS
     pop      : IN  STD_LOGIC;
     head     : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
 
-    avail : OUT STD_LOGIC -- '1' while count > 0
+    avail : OUT STD_LOGIC; -- '1' while count > 0
+
+    -- '1' while fewer than 4 free slots remain. A writer that checks
+    -- this before each push (with a few clocks of latency) never
+    -- overflows. Unconnected by callers that don't need back-pressure.
+    almost_full : OUT STD_LOGIC
   );
 END byte_fifo;
 
@@ -97,6 +102,11 @@ BEGIN
         avail <= '0';
       ELSE
         avail <= '1';
+      END IF;
+      IF count >= c_depth - 4 THEN
+        almost_full <= '1';
+      ELSE
+        almost_full <= '0';
       END IF;
 
       IF do_push THEN
