@@ -2215,7 +2215,7 @@ search from `0x4000` for the first RAM byte, non-destructive
 complement/verify/restore walk upward, exit at `0x6000` on the void,
 then bounds stored as big-endian words four pages below the top:
 `0x5BFC = 40 00` (bottom), `0x5BFE = 5F FF` (top), stack `R2 = 0x5FFF`.
-**Byte-for-byte identical on the user's real machine.** The same
+**Byte-for-byte identical on the user's real machine.** **Also confirmed on the Cora board itself** (2026-09-19): word zeroed before loading, then after 3s of running `devmem 0x40003BFC` reads `0xFF5F0040` = `40 00 5F FF` -- read via Port B, whose decode is deliberately unrestricted and indexes RAM by the low 13 bits, so Port B `0x3BFC` is the same physical word as the CPU's `0x5BFC`. The same
 simulation boots cleanly to `_08> ` and stays quiet for the full 5
 simulated seconds.
 
