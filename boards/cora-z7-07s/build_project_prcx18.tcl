@@ -230,13 +230,11 @@ set_property -dict [list \
 # side-effect and dbg_uart_status both show 0xC1 (DA=1) right after
 # 0x1008 -- D itself has never been observed directly before this,
 # only inferred.
-# probe20=io_sel_reg (the full CD4076 latch, cs1800_prcx18_top.vhd's
-# own io_sel_reg) -- added 2026-09-18: dbg_uart_status/probe16 shows
-# DA stuck at 1 from power-on onward, never once reading 0 -- meaning
-# da_reg's async reset (wired to io_sel_reg(7), the real nMR trigger
-# per the user's own schematic reading) either never actually gets
-# asserted by PRCX-18's own boot code on this port, or something else
-# is wrong. Probing the whole register directly to settle which.
+# probe20=io_sel_reg (the full CD4076 latch at OUT 11) -- added
+# 2026-09-18. Bit 7 = CDP1854 Master Reset trigger (pulsed once by
+# PRCX-18 via OUT 1,0x80 at ROM 0x0023), bits 1/2 = RSEL / port select.
+# Note for reading probe16 (uart status): THRE/TSRE are hard-wired 1 in
+# cdp1854.vhd, so 0xC0 = idle (DA=0) and 0xC1 = DA=1.
 
 # ---------------------------------------------------------------------
 # Connections

@@ -79,29 +79,21 @@ USE IEEE.numeric_std.ALL;
 ENTITY cdp1854 IS
   PORT (
     clk      : IN  STD_LOGIC; -- driven by TPB -- see FPGA note above
-    -- Real hardware bug found 2026-09-18 (see BRINGUP_LOG.md): da_reg's
-    -- declared VHDL initial value of '0' was NOT reliably honored by
-    -- the actual synthesized flip-flop on real hardware -- a fresh ILA
-    -- snapshot taken immediately after a JTAG bitstream reprogram
-    -- (before the ROM ever loads, before the CPU's reset is ever
-    -- released, i.e. before `clk`/TPB has ever ticked even once) showed
-    -- status_reg already reading 0xC0 (DA=1). Since this whole entity
-    -- only updates on `clk` (TPB), and TPB never pulses while the CPU
-    -- is held in reset, da_reg had no way to reach a defined state on
-    -- its own before the CPU started running -- it needs an
-    -- asynchronous reset, independent of `clk`, to guarantee a known
-    -- good value.
+    -- Master Reset (active high here), modeling the real chip's pin 21
+    -- (nMR). On the real SIO board it is driven by bit 7 of the CD4076
+    -- latch at OUT 11 (N=1, Q=1), through an inverter -- per the
+    -- user's own schematic reading. PRCX-18 pulses it once, early in
+    -- boot: `OUT 1, 0x80` at ROM 0x0023, cleared again by the next
+    -- OUT 1. Clears da_reg and control_reg asynchronously (this entity
+    -- is otherwise clocked by TPB only, which doesn't run while the CPU
+    -- is held in reset). Defaults to '0' (inactive) so instantiations
+    -- that don't map it are unaffected.
     --
-    -- Real reset source, identified from the user's own schematic
-    -- reading: PRCX-18 resets the real CDP1854 chip itself, early in
-    -- boot, via OUT 11 (N=1, Q=1) toggling bit 7 of the CD4076 latch
-    -- (cs1800_io_select.vhd) -- inverted into the chip's real pin 21
-    -- (nMR, Master Reset). An earlier attempt wired this port to
-    -- ctrl_in(0) (the CPU's own system reset) instead, which is why
-    -- that fix never took effect on real hardware no matter how it was
-    -- tested -- ctrl_in(0) and this chip's real reset are two entirely
-    -- different signals on the real board. Defaults to '0' (inactive)
-    -- so existing instantiations that don't map it are unaffected.
+    -- Note: this was added 2026-09-18 while chasing what looked like DA
+    -- stuck at 1 -- a misreading: status_reg's THRE/TSRE are hard-wired
+    -- '1' here, so 0xC0 is the idle value (DA=0) and 0xC1 is DA=1. The
+    -- reset is kept because it matches the real hardware, not because
+    -- it fixed a bug.
     reset    : IN  STD_LOGIC := '0';
     data_in  : IN  STD_LOGIC_VECTOR(7 DOWNTO 0);
     -- FPGA note: driven '0' when not selected/reading, so the parent

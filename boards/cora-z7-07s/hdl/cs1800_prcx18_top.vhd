@@ -115,15 +115,9 @@ ENTITY cs1800_prcx18_top IS
     -- directly in this design.
     dbg_rsel : OUT STD_LOGIC;
 
-    -- Full io_sel_reg visibility, 2026-09-18 -- see cdp1854.vhd's own
-    -- header: bit 7 is supposed to be the real CDP1854 Master Reset
-    -- trigger (OUT 11 toggling it, inverted into the chip's real nMR
-    -- pin), which da_reg's async reset is now wired to. But status_reg
-    -- (dbg_uart_status, already probed) never once reads 0x80 (DA=0)
-    -- from power-on onward on real hardware, meaning either this bit
-    -- never actually gets asserted by PRCX-18's own boot code on this
-    -- port, or something else is wrong -- this taps the whole register
-    -- directly to settle which.
+    -- Full io_sel_reg (CD4076 latch at OUT 11) visibility, 2026-09-18.
+    -- Bit 7 is the real CDP1854 Master Reset trigger (see cdp1854.vhd's
+    -- reset port); bits 1/2 are RSEL / port select.
     dbg_io_sel_reg : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
 
     -- Reliable address visibility, 2026-09-18: dbg_ram_addr (already

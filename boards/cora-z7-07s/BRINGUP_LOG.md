@@ -2221,10 +2221,33 @@ simulated seconds.
 
 **Still open**: on the Cora hardware the Console Task still respawns
 (`_08>` -> `_10>` -> ...) with this map, which the simulation does not
-reproduce. Separately, `dbg_uart_status` shows `DA` stuck at 1 from the
-moment observation starts, and `io_sel_reg(7)` (the CDP1854 `nMR`
-trigger) was never seen asserted -- but every capture so far starts
-seconds after reset release (ROM load + SSH + JTAG arming), so a
-one-time early `nMR` pulse would have been missed. Catching the first
-milliseconds after reset needs a deeper ILA buffer or a JTAG-direct
-reset release.
+reproduce.
+
+## 2026-09-19: correction -- "DA stuck at 1" was a misread status byte
+
+`cdp1854.vhd` hard-wires THRE (bit 7) and TSRE (bit 6) of `status_reg`
+to `1`, so the idle status byte is **`0xC0` = DA 0**, and DA=1 is
+`0xC1` -- exactly as the 2026-09-16/17 entries above already recorded
+(`status_reg=0xC0` as the no-keystroke baseline, "`0xC0` vs `0xC1`").
+From 2026-09-18 onward I misread `0xC0` as DA=1 and `0x80` as DA=0.
+So, in this and the preceding 2026-09-18 entries:
+
+- "DA stuck at 1 from power-on", "spurious phantom keystroke",
+  "status never reads `0x80`" -- all wrong. `0x80` is impossible (TSRE
+  is constant 1); every `0xC0` capture was simply "no character
+  pending". There is no DA bug.
+- The `0xC0` in `D` after `INP4` at `0x1008` was likewise correct:
+  status with no data.
+- The cdp1854 `reset` port (driven by `io_sel_reg(7)`, the real `nMR`)
+  and the pre-boot zeroing of `axi_gpio_1` fixed nothing. Both are
+  kept: the reset matches the real SIO board, the zeroing is harmless.
+  The earlier `ctrl_in(0)` reset variant was already replaced.
+- The `nMR` question is answered statically: `OUT 1, 0x80` (`61 80`)
+  at ROM `0x0023`, just before the RAM test, asserts bit 7 once; the
+  next `OUT 1` from the UART code clears it. Captures that start
+  seconds after reset release could never see it, as suspected.
+
+Comments in `cdp1854.vhd`, `cs1800_prcx18_top.vhd`,
+`build_project_prcx18.tcl` and `gen_load_prcx18_rom.py` are corrected.
+The one real remaining problem is the Console Task respawn on the Cora
+hardware, not reproduced in simulation.
