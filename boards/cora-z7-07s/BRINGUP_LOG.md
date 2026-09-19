@@ -2174,3 +2174,57 @@ writes `0x0` to `0x41210000` (zeroing `uart_rx_data`/
 `uart_rx_available`) before releasing reset, on every load -- not just
 relying on whatever the GPIO configured to.
 
+
+## 2026-09-18/19: real memory map + full address decode; RAM test+count verified against real hardware
+
+**RAM aliasing found.** A targeted ILA write-trigger showed PRCX-18's
+per-task "console already running" flag at `0xFBD0` (checked at
+`0x0396-0x039C`: `LDN RE; ANI 80; BZ 03AD`) is never written, yet it
+kept reading "not running" -- the Cora memory model only decoded
+address bits 15:13 (ROM vs "everything else"), so `0x3BD0`, `0x7BD0`,
+`0xBBD0` and `0xFBD0` were the same physical byte. The user pointed
+out the consequence directly: PRCX-18's RAM test would report 64K
+because of the wrapping -- confirmed below.
+
+**Growing RAM was a dead end on this part.** `g_ram_words=16384`
+(64KB) failed placement (80 RAMB36 needed, 50 available);
+`g_ram_words=8192` (32KB) built cleanly but hung the real CPU at a
+fixed ROM address while the identical config ran fine in GHDL
+(unexplained, real-hardware-only; not pursued). Reverted to the real
+minimal config, 8KB ROM + 8KB RAM, per the user.
+
+**Real full 16-bit decode instead** (`cs1800_prcx18_memory.vhd`): ROM
+chip-select only for `0x0000-0x1FFF`, RAM only for its own installed
+range, everything else genuinely void -- Port A writes discarded,
+reads return `0xFF`. One regression on the way: splitting Port A's
+single `mem(idx)` read into per-branch reads silently turned the
+array into LUTRAM (place failed: "LUT as Distributed RAM
+over-utilized... 8622 / 6000"); restored the single read call, now
+24 RAMB36 (50%), real Block RAM confirmed in `post_route_util.rpt`.
+
+**RAM belongs at `0x4000`, not `0x2000`.** An instrumented GHDL run
+(real ROM, full-size RAM, every write logged) showed zero writes to
+`0x2000-0x3FFF` -- the real backplane's second-EPROM slot -- and the
+RAM test starting at `0x4000`. The user confirmed on a real minimal
+CS1800: ROM `0x0000-0x1FFF` + RAM `0x4000-0x5FFF` works. Moved
+`c_ram_base_addr` to `0x4000`.
+
+**RAM test + count verified** (full disassembly in
+`doc/PRCX18_ANALYSIS.md`, "Boot-time RAM test + count"): hard-coded
+search from `0x4000` for the first RAM byte, non-destructive
+complement/verify/restore walk upward, exit at `0x6000` on the void,
+then bounds stored as big-endian words four pages below the top:
+`0x5BFC = 40 00` (bottom), `0x5BFE = 5F FF` (top), stack `R2 = 0x5FFF`.
+**Byte-for-byte identical on the user's real machine.** The same
+simulation boots cleanly to `_08> ` and stays quiet for the full 5
+simulated seconds.
+
+**Still open**: on the Cora hardware the Console Task still respawns
+(`_08>` -> `_10>` -> ...) with this map, which the simulation does not
+reproduce. Separately, `dbg_uart_status` shows `DA` stuck at 1 from the
+moment observation starts, and `io_sel_reg(7)` (the CDP1854 `nMR`
+trigger) was never seen asserted -- but every capture so far starts
+seconds after reset release (ROM load + SSH + JTAG arming), so a
+one-time early `nMR` pulse would have been missed. Catching the first
+milliseconds after reset needs a deeper ILA buffer or a JTAG-direct
+reset release.

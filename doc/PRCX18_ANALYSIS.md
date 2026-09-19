@@ -217,3 +217,85 @@ RSEL-then-register-access sequences; the rest are isolated `OUT 1`s or
 `OUT 4`s, consistent with address 11 being a general-purpose
 reset/preset line most of the time, not a dedicated per-access RSEL
 toggle.
+
+## Boot-time RAM test + count (verified 2026-09-18/19)
+
+Traced directly from a GHDL bus trace of the real ROM running on the
+Cora port's own memory model (`cs1800_prcx18_memory.vhd`, ROM
+`0x0000-0x1FFF`, RAM `0x4000-0x5FFF`, every other address genuinely
+unmapped -- reads `0xFF`, writes discarded), and confirmed
+byte-for-byte by the user on a real minimal CS1800 (one 2764 EPROM at
+`0x0000`, one 6264 SRAM at `0x4000`).
+
+**Search for the bottom of RAM**, starting at a hard-coded `0x4000`
+(`0x2000-0x3FFF` is the real backplane's second-EPROM/macro-assembler
+slot, never probed at all -- so a minimal machine's RAM chip *must*
+sit at `0x4000`, not directly after the OS ROM):
+
+```
+0025: F8 40     LDI 40
+0027: BA        PHI RA
+0028: F8 00     LDI 00
+002A: AA        PLO RA         ; RA = 0x4000
+002B: EA        SEX RA
+002C: 38        SKP
+002D: 1A        INC RA         ; <-- loop: next candidate byte
+002E: 0A        LDN RA         ;   D = original byte
+002F: BF        PHI RF         ;   save it
+0030: FB FF     XRI FF         ;   complement
+0032: 5A        STR RA         ;   write complement
+0033: F3        XOR            ;   D = complement xor readback (0 = RAM)
+0034: 3A 2D     BNZ 002D       ;   not RAM -> keep searching
+0036: 9F 5A     GHI RF / STR RA  ; restore original byte
+0038: 9A BB 8A AB  RB = RA     ; RB = first RAM byte (bottom)
+003C: EB        SEX RB
+```
+
+**Walk upward to find the top**, same non-destructive
+read/complement/verify/restore test per byte:
+
+```
+003D: 1B        INC RB         ; <-- loop
+003E: 0B        LDN RB
+003F: BF        PHI RF
+0040: FB FF     XRI FF
+0042: 5B        STR RB
+0043: F3        XOR
+0044: 3A 4B     BNZ 004B       ; first non-RAM byte -> done
+0046: 9F 5B     GHI RF / STR RB  ; restore
+0048: 9B        GHI RB
+0049: 3A 3D     BNZ 003D       ; else loop until RB wraps to 0x0000
+```
+
+**Store the result** (`004B` onward):
+
+```
+004B: 2A              DEC RA
+004C: 9A FC 01 BA     RA.1 = bottom page (0x40)
+0050: 9B FF 01 BB     RB   = top page    (0x5F00)
+0054: B2 F8 FF A2     R2   = 0x5FFF      ; stack pointer = top of RAM
+0058..0064            R7.1=5E, R6.1=5D, R1.1=5C, RE.1=5B
+                      (work pages carved down from the top; R1 is the
+                      CDP1802's fixed interrupt register)
+0065: F8 FF AE EE     RE = 0x5BFF, X = E
+0069..0072            4x STXD:
+                        M(5BFF)=FF  M(5BFE)=5F   -> top    = 0x5FFF
+                        M(5BFD)=00  M(5BFC)=40   -> bottom = 0x4000
+```
+
+I.e. the RAM bounds are stored as two big-endian words **four pages
+below the top of RAM**: `bottom` at `top_page-4:FC`, `top` at
+`top_page-4:FE`. On the minimal 8K machine that is `0x5BFC = 40 00`,
+`0x5BFE = 5F FF` -- identical on real hardware and in simulation.
+
+Consequences, both confirmed:
+- Any memory model that **aliases** high addresses onto a small RAM
+  (the Cora port's original bits-15:13-only decode) defeats this test
+  entirely: every probe from `0x4000` up "passes", the walk only stops
+  when `RB` wraps past `0xFFFF`, and PRCX-18 believes it has RAM up to
+  `0xFFFF` (table at `0xFBFC`, stack at `0xFFFF`) -- then scatters its
+  own data structures across mirrors of the same few KB.
+- Unmapped addresses must fail a write-then-readback of the
+  complement. Returning a fixed value (here `0xFF`) is sufficient: at
+  `0x6000` the test reads `FF`, writes `00` (discarded), reads `FF`
+  back, `XOR` = `FF`, exit.
