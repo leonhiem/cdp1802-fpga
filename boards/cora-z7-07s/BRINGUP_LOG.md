@@ -2392,3 +2392,17 @@ phantom S3; after, 23 interrupts, 0 phantom, 0 mismatches.
 references updated. Both diffs were checked row by row, see
 `doc/CDP1802_CORE_REVIEW.md` bug 3: in `tb_cs1800` the handler's `RET` now
 takes the tick that arrived while IE=0, which is real-1802 behaviour.
+
+## 2026-09-19: instruction coverage test (TODO 2.2) and datasheet Table 2 bus fixes
+
+New test `sim/ghdl/isa/run_isa_coverage.sh`: 255/255 opcodes (0x68
+excluded), every register variant, 54/54 branch/skip outcomes, I/O, EF,
+Q, interrupts, IDL, all checked by `lockstep1802.py`, now including the
+datasheet's Table 2 (address and read/write per execute cycle). Results
+were right for every opcode, but the bus activity was not: IDL, IRX, SKP,
+NOP, the long skips and LSKP did no memory read, a not-taken long branch
+read R(P) twice, and PHI/PLO/SEP/SEX/REQ/SEQ/shifts showed the fetch
+address. All fixed in `instr.vhd` (details: `doc/CDP1802_CORE_REVIEW.md`,
+bug 4). Verified in simulation (coverage, exhaustive ALU, PRCX-18
+lockstep) and on the Cora: boot, `<CR>` x3, full `DMP` and closing
+prompt, LC at 50 Hz.
