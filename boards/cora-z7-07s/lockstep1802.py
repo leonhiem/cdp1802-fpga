@@ -371,13 +371,12 @@ def main():
         while i < len(cyc) and cyc[i]['sc'] == 2:
             i += 1
         if i < len(cyc) and cyc[i]['sc'] == 3 and c.IE == 0:
-            # Core enters S3 on a pending INT even with IE=0 but then
-            # doesn't vector (control.vhd). Not real-chip behaviour; count
-            # it, and flag it if it did vector after all.
+            # A real 1802 never enters S3 with IE=0. control.vhd used to
+            # (a "phantom" S3 that didn't vector, but did acknowledge and
+            # so lose the interrupt request, since the system's INT
+            # acknowledge is SC=11). Fixed; now an error if it comes back.
             n_phantom += 1
-            nxt = next((x for x in cyc[i + 1:i + 4] if x['sc'] == 0), None)
-            if nxt is not None and nxt['addr'] != c.R[c.P]:
-                err(f"S3 with IE=0 after {op:02X} at {pc:04X} vectored anyway (next fetch {nxt['addr']:04X})")
+            err(f"S3 cycle with IE=0 after {op:02X} at {pc:04X}")
             i += 1
         elif i < len(cyc) and cyc[i]['sc'] == 3:
             n_int += 1

@@ -2376,3 +2376,19 @@ per 1000 clocks) gives the full 16-line dump `4000`-`40F0` plus the
 closing `_08> `, 1344 bytes, none lost. On the Cora (LC at 50 Hz),
 `<CR>` x3 + `DMP<CR>` gives the complete dump and the closing prompt,
 1368 bytes.
+
+## 2026-09-19: no S3 cycle with IE=0 (TODO 1) -- it was losing LC ticks
+
+`control.vhd` entered S3 on a pending INT even with IE=0 (then did not
+vector). Since the system's interrupt acknowledge is `SC = "11"`
+(`cs1800_cpu.vhd`), each such phantom S3 cleared the LC interrupt latch,
+so any 50 Hz tick arriving while interrupts were disabled was lost. It
+also let a masked interrupt wake `IDL`. Fixed by gating the three
+transitions into S3 with `ie = '1'`.
+
+Lockstep run (PRCX-18 + `DMP`, LC 50 Hz): before, 17 interrupts + 24
+phantom S3; after, 23 interrupts, 0 phantom, 0 mismatches.
+`lockstep1802.py` now treats an S3 with IE=0 as an error. Golden
+references updated. Both diffs were checked row by row, see
+`doc/CDP1802_CORE_REVIEW.md` bug 3: in `tb_cs1800` the handler's `RET` now
+takes the tick that arrived while IE=0, which is real-1802 behaviour.

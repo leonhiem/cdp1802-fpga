@@ -193,7 +193,7 @@ prompt and drains the output slowly, as the board does. Then
 independent CDP1802 instruction-set model. Pass looks like:
 
 ```
-done: 2xxxxx instructions, NN interrupts, NN phantom S3 (IE=0), 0 mismatches
+done: 2xxxxx instructions, NN interrupts, 0 phantom S3 (IE=0), 0 mismatches
 ...
 PASS: 0 lockstep mismatches, full DMP output and closing prompt
 ```
@@ -330,9 +330,9 @@ two real bugs found only by testing on real silicon.
   the Cora Z7-07S, with the 50 Hz LC interrupt running, matching the
   real CS1800 -- see the milestone at the top of this file and
   `doc/PRCX18_ANALYSIS.md`.
-- Running PRCX-18 found two real bugs in the core, both fixed: INP did
-  not load D, and SHRC/SHLC ignored DF. It also found one remaining
-  difference from the real chip (an S3 cycle with IE=0). An independent
+- Running PRCX-18 found three real bugs in the core, all fixed: INP did
+  not load D, SHRC/SHLC ignored DF, and an S3 cycle with IE=0 that lost
+  interrupts. An independent
   lockstep model now checks every instruction PRCX-18 executes. Details,
   open TODOs and the test plan are in `doc/CDP1802_CORE_REVIEW.md`.
 

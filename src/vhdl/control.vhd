@@ -156,7 +156,9 @@ BEGIN
                     ELSIF forceS1 = '1' THEN
                         v.extraS1 := '1';
                         v.state := c_S1_EXEC;
-                    ELSIF (interrupt = '1' AND r.extraS1 = '0') THEN 
+                    -- A real 1802 only recognises INT while IE=1: with IE=0 there
+                    -- is no S3 cycle at all, and IDL is not woken (below).
+                    ELSIF (interrupt = '1' AND ie = '1' AND r.extraS1 = '0') THEN 
                         v.state := c_S3_INTERRUPT;
                     ELSIF (Go_Idle = '1' AND r.extraS1 = '0') THEN 
                         v.state := c_S1_IDLE;
@@ -170,7 +172,7 @@ BEGIN
                 IF r.clk_cnt = 7 THEN
                     IF dma_in = '1' OR dma_out = '1' THEN
                         v.state := c_S2_DMA;
-                    ELSIF interrupt = '1' THEN 
+                    ELSIF interrupt = '1' AND ie = '1' THEN 
                         v.state := c_S3_INTERRUPT;
                     END IF;
                 END IF;
@@ -178,7 +180,7 @@ BEGIN
                 IF r.clk_cnt = 7 THEN
                     IF dma_in = '1' OR dma_out = '1' THEN
                         v.state := c_S2_DMA;
-                    ELSIF interrupt = '1' THEN 
+                    ELSIF interrupt = '1' AND ie = '1' THEN 
                         v.state := c_S3_INTERRUPT;
                     ELSE
                         v.state := c_S0_FETCH;

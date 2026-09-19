@@ -4,7 +4,7 @@ September 2026. This is a report on what bringing up the real PRCX-18
 v1.9.0 operating system on the Cora Z7-07S revealed about the CDP1802
 core (`src/vhdl/`). It separates what was wrong **in the core itself**
 from what was wrong in the system around it (memory, UART, board glue).
-It describes how the regression testing works and lists the open TODOs.
+It describes how the regression testing works and lists the TODOs.
 The day-by-day account is in `boards/cora-z7-07s/BRINGUP_LOG.md`.
 
 ## Summary
@@ -13,7 +13,7 @@ The day-by-day account is in `boards/cora-z7-07s/BRINGUP_LOG.md`.
 |---|---|---|---|---|
 | 1 | `instr.vhd` (INP, `0x69`-`0x6F`) | D was loaded from the bus one sub-cycle after the device had stopped driving it | status reads always gave D=0; the console never saw a keystroke | fixed, `eb9d247` |
 | 2 | `alu.vhd` (SHRC `0x76`, SHLC `0x7E`) | rotate *without* carry: DF was ignored | interrupt handler saved/restored DF wrongly, so an interrupted task resumed with a random DF. The console "received" phantom `^@` characters and was respawned (`_10>`, `_18>`...) | fixed, `d82e04a` |
-| 3 | `control.vhd` (S3) | the state machine enters S3 on INT even when IE=0 (then does nothing) | none visible; one wasted machine cycle per LC edge | **TODO 1** |
+| 3 | `control.vhd` (S3) | the state machine entered S3 on INT even when IE=0 (without vectoring) | the S3 cycle acknowledged the LC interrupt, so every 50 Hz tick arriving while interrupts were disabled was **lost**; an IDL with IE=0 also woke up | fixed (TODO 1) |
 
 Everything else checked out. Over the 0.93 s of PRCX-18 execution checked
 by the lockstep model (below), 230,893 instructions using **166 distinct
@@ -119,24 +119,47 @@ it proves "unchanged", not "correct". The reference dumps were updated:
 SHLC `0x3A` -> `0x3B`, and the ADD/ADI results built on it `0x2A` -> `0x2B`,
 `0x1A` -> `0x1B`.
 
-## Finding 3: phantom S3 cycle with IE=0 (control.vhd) -- TODO 1
+## Bug 3: phantom S3 cycle with IE=0 (control.vhd) -- TODO 1, fixed
 
-`control.vhd` goes to `c_S3_INTERRUPT` whenever `interrupt = '1'` at the
-end of S1 (also from S1_IDLE and S2_DMA), without looking at `ie`. In S3
-the T/P/X updates are gated by `ie`, so with IE=0 nothing happens except
-one extra machine cycle (with SC=11 on the pins). A real 1802 only
-recognises an interrupt when IE=1, and it never produces an S3 cycle
-otherwise.
+**Real 1802:** an interrupt request is only recognised while IE=1. With
+IE=0 there is no S3 (interrupt) cycle at all, and `IDL` keeps waiting.
 
-Harmless for PRCX-18 (the lockstep checker counted 23 of these and
-verified none of them vectored), but it's a timing and SC-pin difference
-from the real chip that anything watching SC (or counting cycles) would
-notice. Suggested fix: add `AND ie = '1'` to the three S3 transitions,
-then re-check with the lockstep run and the golden reference. The latter
-will change where its own test program has interrupts pending while
-disabled. Needs a careful look at *when* `ie` updates for `DIS`/`RET`,
-so an interrupt right after `RET` is still taken and one right after
-`DIS` is not.
+**The core:** `control.vhd` went to `c_S3_INTERRUPT` whenever
+`interrupt = '1'` at the end of S1 (and from S1_IDLE and S2_DMA),
+without looking at `ie`. Inside S3 the T/P/X updates *were* gated by
+`ie`, so with IE=0 the CPU did not vector. But it still produced a full
+machine cycle with SC=11 on the pins.
+
+**Why it mattered (more than first thought):** in `cs1800_cpu.vhd` the
+interrupt acknowledge is simply `SC = "11"`, as on the real CS1800. The
+phantom S3 therefore *acknowledged and cleared* the LC interrupt latch
+while interrupts were disabled, so that tick was lost. The real chip
+would keep the request pending and take it as soon as `RET` sets IE=1.
+Over the same ~0.8 s PRCX-18 run: before the fix 17 interrupts taken + 24
+phantom S3 (= 24 lost LC ticks); after, 23 interrupts taken, 0 phantom.
+PRCX-18's 50 Hz clock ran noticeably slow. A second consequence: an
+`IDL` executed with IE=0 was woken by a masked interrupt.
+
+**Fix:** `AND ie = '1'` on the three transitions into S3. `ie` is written by
+`RET`/`DIS` at `clk_cnt = "100"`, before the `clk_cnt = 7` decision, so
+an interrupt pending during `RET` is taken right after it and one
+pending during `DIS` is not, as on the real chip.
+
+**Verification:**
+- Lockstep (real PRCX-18, LC at 50 Hz, `DMP`): 205,538 instructions,
+  23 interrupts, 0 phantom S3, 0 mismatches. `lockstep1802.py` now
+  reports any S3 with IE=0 as an error.
+- The golden references changed (whole files, since all later
+  timestamps shift). Checked row by row with the time column and S3
+  rows removed:
+  - `tb_cdp18_tpb.txt`: 2 phantom S3 gone. The only other difference is
+    that the program reaches its `IDL` at `0x00D8` two cycles earlier and
+    so idles two cycles longer. The real interrupt is taken at the same
+    time (700375 ns) with the same handler sequence.
+  - `tb_cs1800_tpb.txt`: 8 phantom S3 gone. At `0x00D5` the handler's
+    `RET` now takes the LC interrupt that arrived while IE=0 (at
+    626375 ns), where before it had been swallowed by a phantom S3 at
+    604375 ns. This is the behaviour change the fix is meant to make.
 
 ## Not core bugs, but found on the way
 
@@ -210,8 +233,8 @@ Procedures for all three are in the top-level `README.md`, section
 
 ## TODOs
 
-### TODO 1: no S3 cycle when IE=0
-See finding 3 above.
+### TODO 1: no S3 cycle when IE=0 -- done
+See bug 3 above.
 
 ### TODO 2: tests that prove the core correct
 The lockstep run proves the instructions PRCX-18 uses. To prove the rest:
@@ -281,4 +304,25 @@ with the 8 KB minimum as the default:
   `TSKL`/`DMP`, checking for respawns or hangs.
 - Make sure nothing copyrighted or secret is committed (ROM dump,
   schematics, board password): `git ls-files` review.
+- Carry the core fixes back to the original
+  [cdp1802](https://github.com/leonhiem/cdp1802) repo: INP (`instr.vhd`,
+  `eb9d247`), SHRC/SHLC (`alu.vhd` + `instr.vhd` comment, `d82e04a`),
+  no S3 with IE=0 (`control.vhd`), plus the matching
+  `test_program_pkg.vhd` expected-value comments. Check how that repo's
+  own golden references/testbenches change, same as here.
 - Tag a release.
+
+### TODO 5: faster interactive console
+`interactive_console.sh` works but is slow to use: output arrives at
+~35 characters/s, so a `DMP` draws line by line. The limit is the shell
+loop, which starts a `busybox devmem` process for every GPIO access (about
+3 per byte). Options, roughly in order of effort:
+- A small C program (cross-compiled for the Cortex-A9, or built on the
+  board if it has a compiler) that `mmap`s `/dev/mem` once and polls the
+  FIFO in a tight loop. Should be at least an order of magnitude faster.
+- Pop several bytes per status read: a wider FIFO read port (e.g. up to
+  4 bytes plus count in one 32-bit AXI GPIO read) to cut the accesses per
+  byte.
+- Longer term: route the CDP1854's TX/RX to a real UART (PL pins or the
+  PS UART via EMIO) so a normal terminal program (`minicom`) can connect,
+  which is also closer to the real CS1800's serial port.
