@@ -158,6 +158,105 @@ devmem 0x41200008                 # read status back -- bit 0 (Q) should be 1
 Programs are loaded 32 bits (4 bytes) at a time, little-endian: the byte
 at the lowest address goes in bits 7:0 of the word.
 
+## Testing
+
+Three layers, from seconds to real silicon. Why each exists and what it
+can and cannot catch is explained in `doc/CDP1802_CORE_REVIEW.md`
+("How the regression testing works"). Run layers 1 and 2 after every
+change to `src/vhdl/`. Run layer 3 before trusting a new bitstream.
+
+### Layer 1: golden-reference regression (seconds, no ROM, no hardware)
+
+```
+sim/ghdl/run.sh                  # cdp18/cs1800 bus traces + memory/console assertion tests
+git diff --stat sim/ghdl/reference/
+boards/cora-z7-07s/sim/run.sh    # board-level wrapper against the same reference
+source <Vivado install>/2024.1/settings64.sh && sim/xsim/run.sh   # optional: same on Vivado xsim
+```
+
+Pass = every script prints `PASS` and `git diff sim/ghdl/reference/` is
+empty. If the reference *does* change, the diff shows exactly which bus
+cycles changed (`time addr data nMRD nMWR Q SC`, one line per TPB).
+Only commit the new reference once you've explained every changed line.
+For example, the SHRC/SHLC fix legitimately changed four lines.
+
+### Layer 2: real-ROM lockstep check (~10 minutes, needs your ROM dump)
+
+```
+boards/cora-z7-07s/sim/run_prcx18_lockstep.sh /path/to/prcx18.bin
+```
+
+This boots the real PRCX-18 (8 KB EPROM image, not in this repo) on
+the Cora design in GHDL, with LC at 50 Hz. It types `DMP<CR>` at the
+prompt and drains the output slowly, as the board does. Then
+`boards/cora-z7-07s/lockstep1802.py` checks every machine cycle against an
+independent CDP1802 instruction-set model. Pass looks like:
+
+```
+done: 2xxxxx instructions, NN interrupts, NN phantom S3 (IE=0), 0 mismatches
+...
+PASS: 0 lockstep mismatches, full DMP output and closing prompt
+```
+
+On a mismatch it prints the failing check and the 25 instructions
+before it, with P, X, D, DF, IE and R(X) at each step, for example:
+
+```
+*** MISMATCH #1 at cycle 209752: STXD: expected write M(5FF6)<=80, got M(5FF6)<=00
+      5CD7: 76  P=1 X=2 D=00 DF=1 IE=0 R2=5FF6    <- SHRC with DF=1 should give 0x80
+```
+
+Output files are in `boards/cora-z7-07s/sim/run_lockstep/` (gitignored):
+`cyc.log` (the cycle log), `lockstep.txt`, and `console.txt` (what the
+console printed). The generated ROM package is placed there too, so it
+never ends up in git. You can also run the checker on any cycle log
+yourself: `python3 boards/cora-z7-07s/lockstep1802.py <rom.bin> <cyc.log> [max_errors]`.
+
+### Layer 3: on the Cora Z7-07S
+
+Use the PRCX-18 design (`build_project_prcx18.tcl`), not the older
+`build_project.tcl` shown in "Getting started". From the host:
+
+```
+source <Vivado install>/2024.1/settings64.sh
+vivado -mode batch -source boards/cora-z7-07s/build_project_prcx18.tcl   # ~10 min
+# on the board first: make sure no old devmem loops are running,
+#   ps | grep -E "devmem|interactive"   -- reprogramming under one can hang the board
+vivado -mode batch -source boards/cora-z7-07s/program_prcx18.tcl
+python3 boards/cora-z7-07s/gen_load_prcx18_rom.py /path/to/prcx18.bin > /tmp/load.sh
+scp /tmp/load.sh boards/cora-z7-07s/interactive_console.sh root@<board>:/tmp/
+```
+
+(The board's SSH server needs `-o HostKeyAlgorithms=+ssh-rsa -o
+PubkeyAcceptedAlgorithms=+ssh-rsa` with current OpenSSH.) Then on the board:
+
+```
+sh /tmp/load.sh                       # holds reset, loads the ROM, starts the CPU with LC running
+sh /tmp/interactive_console.sh        # live console; exit with Ctrl-]  (0x48 as argument = LC off)
+```
+
+The ROM lives in Block RAM loaded at runtime, not in the bitstream, so
+repeat `load.sh` after every reprogram or power cycle. The board runs
+from a ramdisk, so `/tmp` is empty after a power cycle.
+
+Expected session (compare with the real CS1800):
+
+```
+Dutch 1800 MicroProUsers
+CS1800/PRCX-18    V1.9.0
+
+-SYS-Starting Console Task-
+_08>                      <CR> gives a new _08> prompt
+_08> TSKL                 task list: System 00, Console 08, TSKL 10
+_08> DMP                  16 lines, 4000-40F0, then _08>
+```
+
+Things to check: exactly one "Starting Console Task", the prompt stays
+`_08>` (no `_10>`, `_18>` or `^@` appearing by itself, even after
+minutes with LC on), and long output such as `DMP` completes with a
+closing prompt. Output arrives at ~35 characters/s because of the devmem
+bridge; that is expected.
+
 ## Repository layout
 
 ```
@@ -222,16 +321,20 @@ two real bugs found only by testing on real silicon.
   program.
 - The S0/S1/S2/S3 fetch/execute/DMA/interrupt cycle and TPA/TPB timing are
   implemented per the datasheet.
-- No outstanding `TODO`/`FIXME` markers in the source.
 - Proven on real Zynq-7000 hardware (Cora Z7-07S): a program written from
   Linux userspace, not baked into the bitstream, has run correctly --
   see `boards/cora-z7-07s/BRINGUP_LOG.md`.
 - Proven against real historical CDP1802 software, not just the
   synthetic test program: the real PRCX-18 v1.9.0 operating system
-  boots correctly to its actual login prompt in GHDL simulation,
-  matching a real physical CS1800 rack byte-for-byte -- see the
-  milestone at the top of this file and `doc/PRCX18_ANALYSIS.md`.
-  Not yet run on the Cora Z7-07S hardware itself; that's next.
+  boots to its prompt and runs interactive commands (`TSKL`, `DMP`) on
+  the Cora Z7-07S, with the 50 Hz LC interrupt running, matching the
+  real CS1800 -- see the milestone at the top of this file and
+  `doc/PRCX18_ANALYSIS.md`.
+- Running PRCX-18 found two real bugs in the core, both fixed: INP did
+  not load D, and SHRC/SHLC ignored DF. It also found one remaining
+  difference from the real chip (an S3 cycle with IE=0). An independent
+  lockstep model now checks every instruction PRCX-18 executes. Details,
+  open TODOs and the test plan are in `doc/CDP1802_CORE_REVIEW.md`.
 
 ## FPGA porting notes
 

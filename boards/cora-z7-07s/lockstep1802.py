@@ -163,6 +163,8 @@ def main():
             if (op >> 4) == 0xC and len(ex) == 2:
                 break
         if not ex:
+            if i >= len(cyc):
+                break  # log ends mid-instruction (simulation stopped)
             err(f"no S1 cycle after fetch of {op:02X} at {pc:04X}")
             continue
         e0 = ex[0]
