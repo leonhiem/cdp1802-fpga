@@ -189,7 +189,7 @@ sim/ghdl/alu/run_alu_exhaustive.sh 76 7E    # just some (opcodes in hex)
 
 This runs each ALU instruction (ADD, ADC, SD, SDB, SM, SMB, OR, AND, XOR,
 their immediate forms, SHR, SHL, SHRC, SHLC) on the bare core
-(`tb/vhdl/tb_cdp1802_alu.vhd`) over every combination of D (256) x
+(`tb/vhdl/tb_cdp1802_lockstep.vhd`) over every combination of D (256) x
 operand (256) x DF (2). The resulting D and DF of every case are checked
 by the lockstep model (`lockstep1802.py --flat`), so no table of expected
 values is involved. The simulations run in parallel (`JOBS=n` to set how
@@ -200,6 +200,28 @@ first wrong result, for example the old SHRC bug:
 
 ```
 *** MISMATCH #1 at cycle 47: STR R7: expected write M(0100)<=80, got M(0100)<=00
+```
+
+### Layer 1c: instruction coverage + datasheet bus check (seconds, no ROM, no hardware)
+
+```
+sim/ghdl/isa/run_isa_coverage.sh
+```
+
+This runs one generated program on the bare core that executes every
+opcode except 0x68 (undefined on the 1802), with every register variant,
+and takes every conditional branch and skip both ways. It covers I/O
+(OUT/INP 1-7 through a loopback), EF1-4, Q, interrupts and IDL too. The
+lockstep model checks every result, the Q pin and N lines, the interrupt
+timing, and every execute cycle's address and read/write against the
+datasheet's Table 2. Pass looks like:
+
+```
+done: 2555 instructions, 4 interrupts, 0 phantom S3 (IE=0), 0 mismatches
+opcode coverage: 255/255 (0x68 excluded)
+branch/skip outcome coverage: 54/54
+coverage: complete
+PASS: every opcode (0x68 excluded) and every branch/skip outcome, 0 mismatches
 ```
 
 ### Layer 2: real-ROM lockstep check (~10 minutes, needs your ROM dump)

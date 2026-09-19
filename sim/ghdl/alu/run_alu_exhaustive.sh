@@ -3,7 +3,7 @@
 # TODO 2.1 (doc/CDP1802_CORE_REVIEW.md): exhaustive ALU test of the bare
 # CDP1802 core. For every ALU instruction, gen_alu_prog.py builds a program
 # that runs it over all D x M x DF combinations (131,072; shifts D x DF),
-# tb_cdp1802_alu.vhd runs it on src/vhdl/cdp1802.vhd with a flat 64 KB
+# tb_cdp1802_lockstep.vhd runs it on src/vhdl/cdp1802.vhd with a flat 64 KB
 # memory, and lockstep1802.py --flat checks every result byte and every
 # DF-dependent branch against its own instruction-set model.
 #
@@ -52,14 +52,14 @@ SRCS=(
   "$SRC/control.vhd"
   "$SRC/instr.vhd"
   "$SRC/cdp1802.vhd"
-  "$ROOT/tb/vhdl/tb_cdp1802_alu.vhd"
+  "$ROOT/tb/vhdl/tb_cdp1802_lockstep.vhd"
 )
 
 (
   cd "$WORK"
   ghdl -a "${GHDL_FLAGS[@]}" "${SRCS[@]}"
   echo 00 > prog.hex   # elaboration opens the default g_prog_file
-  ghdl -e "${GHDL_FLAGS[@]}" tb_cdp1802_alu
+  ghdl -e "${GHDL_FLAGS[@]}" tb_cdp1802_lockstep
 )
 
 run_op() {
@@ -69,7 +69,7 @@ run_op() {
   cd "$d"
   python3 "$HERE/gen_alu_prog.py" "$op" prog
   local t0=$SECONDS
-  ghdl -r "${GHDL_FLAGS[@]}" tb_cdp1802_alu -gg_prog_file=prog.hex -gg_log_file=cyc.log \
+  ghdl -r "${GHDL_FLAGS[@]}" tb_cdp1802_lockstep -gg_prog_file=prog.hex -gg_log_file=cyc.log \
        --ieee-asserts=disable > sim.txt 2>&1 || true
   if ! grep -q "DONE" sim.txt; then
     echo "$op FAIL: simulation did not finish (see $d/sim.txt)" > "$WORK/$op.result"

@@ -14,6 +14,7 @@ The day-by-day account is in `boards/cora-z7-07s/BRINGUP_LOG.md`.
 | 1 | `instr.vhd` (INP, `0x69`-`0x6F`) | D was loaded from the bus one sub-cycle after the device had stopped driving it | status reads always gave D=0; the console never saw a keystroke | fixed, `eb9d247` |
 | 2 | `alu.vhd` (SHRC `0x76`, SHLC `0x7E`) | rotate *without* carry: DF was ignored | interrupt handler saved/restored DF wrongly, so an interrupted task resumed with a random DF. The console "received" phantom `^@` characters and was respawned (`_10>`, `_18>`...) | fixed, `d82e04a` |
 | 3 | `control.vhd` (S3) | the state machine entered S3 on INT even when IE=0 (without vectoring) | the S3 cycle acknowledged the LC interrupt, so every 50 Hz tick arriving while interrupts were disabled was **lost**; an IDL with IE=0 also woke up | fixed (TODO 1) |
+| 4 | `instr.vhd` (bus cycles) | memory reads missing or at the wrong address in IDL, IRX, SKP, NOP, long skips, LSKP and not-taken long branches, versus the datasheet's Table 2 | none for PRCX-18 (results were right); matters for memory-mapped hardware with read side effects, e.g. in the real backplane | fixed (TODO 2.2) |
 
 Everything else checked out. Over the 0.93 s of PRCX-18 execution checked
 by the lockstep model (below), 230,893 instructions using **166 distinct
@@ -161,16 +162,68 @@ pending during `DIS` is not, as on the real chip.
     626375 ns), where before it had been swallowed by a phantom S3 at
     604375 ns. This is the behaviour change the fix is meant to make.
 
+## Bug 4: execute-cycle bus activity differed from the datasheet (instr.vhd) -- TODO 2.2, fixed
+
+The coverage test (TODO 2.2) checks every execute cycle against the
+datasheet's **Table 2, "Conditions on data bus and memory address lines
+during all machine states"**. That table gives, per instruction, the
+address on the bus and whether MRD or MWR is active. The results in
+registers and memory were already right for every opcode. The bus
+activity was not:
+
+| Instruction | Table 2 | Core before |
+|---|---|---|
+| IDL (00) | reads M(R0), in its own cycle and every idle cycle | no read |
+| IRX (60) | reads M(R(X)) | no read |
+| SKP (38) | reads M(R(P)) (like every short branch) | no read |
+| NOP (C4) | reads M(R(P)) in both cycles | no read |
+| long skips (C5-C7, CC-CF) | taken: reads R(P), R(P)+1; not taken: R(P) twice | no reads |
+| LSKP (C8) | reads R(P), R(P)+1 (listed with the long branches) | no reads |
+| long branch not taken (C1-C3, C9-CB) | reads R(P), then R(P)+1 | R(P) twice |
+| PHI/PLO, SEP/SEX, REQ/SEQ, SHR/SHRC, SHL/SHLC | address R(N), R(X) or R(P); no access | previous (fetch) address |
+
+The last row has no read or write strobe, so only a logic analyser could
+see it. The others are real reads: a memory-mapped device whose read has
+a side effect (a status register that clears on read, for example) would
+see an access pattern different from a real 1802. That matters once the
+Cora sits in the real CS1800 backplane.
+
+**Fixes** (`instr.vhd`):
+- IDL: `Do_MRD` with R(0) selected, in the IDL cycle and in `c_S1_IDLE`.
+  A new `idl` flag limits this to IDL; LOAD mode also uses `S1_IDLE` and
+  has its own row in Table 2 (not changed).
+- IRX, SKP, NOP, long skips, LSKP: `Do_MRD`.
+- Long branches and skips now advance R(P) by 1 per execute cycle
+  (address R(P), then R(P)+1) when they move on, instead of +2 in the
+  second cycle. Not-taken skips explicitly keep R(P).
+- The no-access instructions load the address register (`wr_A`) at
+  `clk_cnt = "000"` from the register Table 2 names.
+
+**A robustness point found on the way:** `R_in` is not reset at the start
+of a cycle (`v := r`). The old not-taken long branch and long-skip
+sequences relied on the stale `R_in` from the fetch happening to equal
+R(P), because they wrote R(P) back with `wr_R` without setting `R_in`.
+The new code sets `R_in` on every path.
+
+**0x68:** decoded as "INP with N=0" (N lines 000, memory write). On the
+1802 this opcode is undefined (the 1804/1805 use it as a prefix), so it
+is left out of the tests.
+
+**Verification:** coverage test with `--strict-address`: 0 mismatches.
+Golden references: all 313 changed rows (72 + 241) are execute-cycle rows
+of exactly these instructions (plus one S3 row that follows an IDL).
+Only address, data and nMRD change; there are no changes in time, SC,
+nMWR, Q or any fetch row, and the row count is unchanged.
+
 ## Not core bugs, but found on the way
 
 - **reg_R power-up (`e9dc776`):** R1-RF started as `'U'` in simulation.
   The real chip leaves them undefined too, and the FPGA powers them to 0,
   but PRCX-18 reads R7.lo before writing it, so GHDL spread X through the
   whole simulation. Now explicitly 0. Reset still only clears R0.
-- **SKP (`0x38`) bus cycle:** the core does no memory read in the SKP
-  execute cycle. The lockstep checker tolerates this. Worth checking
-  against the datasheet's timing table, since a real 1802 may do a
-  (discarded) read there. It only matters for bus-level exactness.
+- **SKP (`0x38`) bus cycle:** the core did no memory read in the SKP
+  execute cycle. The datasheet's Table 2 says it reads; fixed as part of
+  bug 4.
 
 System-level fixes (not in the core), for completeness:
 `cs1800.vhd` OR-merged data bus; `ram.vhd` latches -> synchronous write;
@@ -246,7 +299,7 @@ The lockstep run proves the instructions PRCX-18 uses. To prove the rest:
    D x 2 DF). The operand is M(R(X)) for the memory forms and a
    self-modified immediate byte for the immediate forms. After every
    case the result D is stored (`STR`) and DF selects a `BDF` branch, so
-   both are visible on the bus. `tb/vhdl/tb_cdp1802_alu.vhd` runs the
+   both are visible on the bus. `tb/vhdl/tb_cdp1802_lockstep.vhd` runs the
    program on the bare core with a flat 64 KB memory, and
    `lockstep1802.py --flat` checks every stored byte and every branch.
    Result: **2,361,344 cases, 0 mismatches** (18 memory/immediate
@@ -258,14 +311,34 @@ The lockstep run proves the instructions PRCX-18 uses. To prove the rest:
    Caveat: "correct" here means "agrees with `lockstep1802.py`'s ALU
    definitions", which were written from the datasheet independently of
    `alu.vhd`, but by one person (me). See item 8.
-2. **Coverage-driven instruction tests.** Still unexercised by PRCX-18:
-   `IDL` (00), `IRX` (60), `LDN`/`INC`/`DEC`/`LDA`/`STR`/`GLO`/`GHI`/
-   `PHI`/`PLO`/`SEP`/`SEX` on several registers, `ADC`/`SDB`/`SMB`/
-   `SDBI` (74/75/77/7D), `OR`/`AND`/`SD`/`ORI` (F1/F2/F5/F9), long
-   branches `LBQ`/`LBZ`/`LBDF`/`LBNQ`/`LBNZ`/`LBNF` (C1-C3, C9-CB), all
-   long skips (C5, C6, CC, CD, CF), `BQ` (31), and EF branches `B1`-`B4`/
-   `BN1`-`BN4` with the flags actually toggled. Make
-   `lockstep1802.py` report opcode coverage and aim for 256/256.
+2. **Instruction coverage -- done, all PASS.**
+   `sim/ghdl/isa/run_isa_coverage.sh` (README, "Layer 1c"; seconds).
+   `gen_isa_prog.py` generates one program that executes **every opcode
+   except 0x68 (255/255)**, with every register variant R0-RF (for R3,
+   the main PC, the block runs with P=4), and **every conditional
+   branch and skip both ways (54/54 outcomes)**. It covers:
+   - PHI/PLO/GHI/GLO, INC/DEC across a byte boundary, LDN/LDA/STR;
+   - SEX N with LDX/LDXA/IRX/STXD/OUT/INP/ALU through that X;
+   - SEP N and back;
+   - all short and long branches and long skips, with D, DF, Q and
+     EF1-4 set both ways, including the short-branch page quirk (opcode
+     at xxFF, target in the next page);
+   - OUT 1-7 and INP 1-7 through a loopback;
+   - RET/DIS (also changing P), MARK, SAV, LSIE with IE=0/1;
+   - interrupts: taken immediately, masked by DIS then taken right after
+     RET, and waking an IDL.
+   `tb_cdp1802_lockstep.vhd` provides the I/O world (OUT n latches, INP n
+   reads it back, EF1-4 and INT driven from latches) and logs the Q pin
+   and N lines. `lockstep1802.py --flat --coverage --strict-address`
+   models that world and checks, per machine cycle:
+   - every result;
+   - INP data, EF branches, Q and the N lines;
+   - interrupt timing (no S3 without a request, no missed request);
+   - every execute cycle against the datasheet's Table 2.
+
+   It fails unless the coverage is complete. **Result: 0 mismatches, after
+   fixing bug 4** (the functional results were right before; the bus
+   activity was not).
 3. **Random instruction streams.** Generate random but well-formed
    programs (with a fixed R-register setup so memory accesses stay in
    RAM), run them in lockstep. It finds combinations nobody thought of.
@@ -278,8 +351,10 @@ The lockstep run proves the instructions PRCX-18 uses. To prove the rest:
 5. **Pin-level timing against the datasheet:** TPA/TPB position, nMRD/
    nMWR windows, N lines during I/O, and SC codes per cycle, checked
    against the timing tables (see `doc/CDP1802_MEMORY_TIMING.md`),
-   including the SKP read question above. This matters for plugging the
-   Cora into the real backplane.
+   This matters for plugging the Cora into the real backplane. Known
+   candidate: `control.vhd` suppresses TPA in `S1_IDLE`. Table 2 says
+   that is right for LOAD mode (note 5) but not for IDL, which uses the
+   normal memory read cycle (Fig. 8, with TPA). Not yet changed.
 6. **Reset/WAIT/CLEAR modes:** LOAD mode (`nCLEAR=0, nWAIT=1` with DMA
    loading), PAUSE mid-cycle, reset in the middle of an instruction.
 7. Put 1 and 2 into `sim/ghdl/run.sh` so they run on every change. That

@@ -93,6 +93,7 @@ ARCHITECTURE str OF instr IS
     wr_N     : STD_LOGIC;
     mask_R   : STD_LOGIC_VECTOR(1 DOWNTO 0);
     Go_Idle  : STD_LOGIC;
+    idl      : STD_LOGIC; -- idling after an IDL instruction (not LOAD mode)
     Do_MRD   : STD_LOGIC;
     Do_MWR   : STD_LOGIC;
     Q_in     : STD_LOGIC;
@@ -154,6 +155,7 @@ BEGIN
 
       CASE state IS
         WHEN c_S0_FETCH =>
+          v.idl := '0';
           IF clk_cnt = "000" THEN
               v.wr_A := '1'; -- R(P) -> A
           ELSIF clk_cnt = "100" THEN
@@ -166,6 +168,7 @@ BEGIN
           END IF;
         WHEN c_S1_RESET =>
           v.forceS1 := '0';
+          v.idl := '0';
         WHEN c_S1_INIT =>
           -- R(P)
         WHEN c_S1_EXEC =>
@@ -174,6 +177,15 @@ BEGIN
               WHEN "0000" => -- 0x0N
                   IF N_out = "0000" THEN -- IDL
                       v.Go_Idle := '1';
+                      -- reads M(R(0)) in this and every idle cycle
+                      -- (datasheet Table 2); not in LOAD mode, which also
+                      -- uses S1_IDLE (hence the idl flag)
+                      v.idl := '1';
+                      v.DtoR := '1'; -- select R(0)
+                      v.Do_MRD := '1';
+                      IF clk_cnt = "000" THEN
+                          v.wr_A := '1'; -- R(0) -> A
+                      END IF;
                   ELSE -- LDN : M(R(N)) -> D; N!=0
                       v.NtoR := '1'; -- Select R(N)
                       v.Do_MRD := '1';
@@ -320,7 +332,9 @@ BEGIN
                           v.wr_R := '1';
                       END IF;
                   ELSIF N_out = "1000" THEN    -- 0x38 : SKP : R(P)+1
-                      -- select R(P)
+                      -- select R(P); reads M(R(P)) like every short branch
+                      -- (datasheet Table 2)
+                      v.Do_MRD := '1';
                       IF clk_cnt = "000" THEN
                           v.wr_A := '1'; -- R(P) -> A
                       ELSIF clk_cnt = "011" THEN
@@ -458,6 +472,7 @@ BEGIN
               WHEN "0110" =>
                   IF N_out = "0000" THEN -- 0x60 : IRX : R(X)+1
                       v.XtoR := '1'; -- Select R(X)
+                      v.Do_MRD := '1'; -- reads M(R(X)) (datasheet Table 2)
                       IF clk_cnt = "000" THEN
                           v.wr_A := '1'; -- R(X) -> A
                       ELSIF clk_cnt = "011" THEN
@@ -592,7 +607,10 @@ BEGIN
                   ELSIF N_out = "0110" THEN -- 0x76 : RSHR : D >>= 1; LSB(D)->DF; DF->MSB(D)
                       v.rd_D := '1';
                       v.alu_oper := c_ALU_RSHR;
-                      IF clk_cnt = "100" THEN
+                      v.XtoR := '1'; -- Select R(X): bus address per datasheet Table 2 (no access)
+                      IF clk_cnt = "000" THEN
+                          v.wr_A := '1'; -- R(X) -> A: bus address per datasheet Table 2 (no access)
+                      ELSIF clk_cnt = "100" THEN
                           v.wr_D  := '1'; -- alu_out -> D
                           v.wr_DF := '1'; -- carry -> DF
                       END IF;
@@ -631,12 +649,16 @@ BEGIN
                       END IF;
                   ELSIF N_out = "1011" THEN    -- 0x7B : SEQ
                       v.Q_in  := '1';       -- Q=1
-                      IF clk_cnt = "100" THEN
+                      IF clk_cnt = "000" THEN
+                          v.wr_A := '1'; -- R(P) -> A: bus address per datasheet Table 2 (no access)
+                      ELSIF clk_cnt = "100" THEN
                           v.wr_Q  := '1';
                       END IF;
                   ELSIF N_out = "1010" THEN -- 0x7A : REQ
                       v.Q_in  := '0';       -- Q=0
-                      IF clk_cnt = "100" THEN
+                      IF clk_cnt = "000" THEN
+                          v.wr_A := '1'; -- R(P) -> A: bus address per datasheet Table 2 (no access)
+                      ELSIF clk_cnt = "100" THEN
                           v.wr_Q  := '1';
                       END IF;
                   ELSIF N_out = "1100" THEN -- 0x7C : ADI : M(R(P)) + D +DF -> DF,D; R(P)+1
@@ -668,7 +690,9 @@ BEGIN
                   ELSIF N_out = "1110" THEN -- 0x7E : RSHL : D <<= 1; MSB(D)->DF; DF->LSB(D)
                       v.rd_D := '1';
                       v.alu_oper := c_ALU_RSHL;
-                      IF clk_cnt = "100" THEN
+                      IF clk_cnt = "000" THEN
+                          v.wr_A := '1'; -- R(P) -> A: bus address per datasheet Table 2 (no access)
+                      ELSIF clk_cnt = "100" THEN
                           v.wr_D  := '1'; -- alu_out -> D
                           v.wr_DF := '1'; -- carry -> DF
                       END IF;
@@ -706,7 +730,9 @@ BEGIN
                   v.NtoR := '1'; -- Select R(N)
                   v.mask_R := "01"; -- select R(N).0
                   v.rd_D := '1';
-                  IF clk_cnt = "011" THEN
+                  IF clk_cnt = "000" THEN
+                      v.wr_A := '1'; -- R(N) -> A: bus address per datasheet Table 2 (no access)
+                  ELSIF clk_cnt = "011" THEN
                       v.R_in(7 DOWNTO 0) := D_out; -- connect D
                   ELSIF clk_cnt = "100" THEN
                       v.wr_R := '1';
@@ -715,7 +741,9 @@ BEGIN
                   v.NtoR := '1'; -- Select R(N)
                   v.mask_R := "10"; -- select R(N).1
                   v.rd_D := '1';
-                  IF clk_cnt = "011" THEN
+                  IF clk_cnt = "000" THEN
+                      v.wr_A := '1'; -- R(N) -> A: bus address per datasheet Table 2 (no access)
+                  ELSIF clk_cnt = "011" THEN
                       v.R_in(15 DOWNTO 8) := D_out; -- connect D
                   ELSIF clk_cnt = "100" THEN
                       v.wr_R := '1';
@@ -761,9 +789,9 @@ BEGIN
                                   v.R_in := r.tmp_page & D_in; -- connect M(R(P))
                               END IF;
                           ELSE
-                              IF extraS1 = '1' THEN
-                                  v.R_in := std_logic_vector(unsigned(A_out) + 2); -- A+=2
-                              END IF;
+                              -- not taken: still reads R(P), then R(P)+1
+                              -- (datasheet Table 2), +1 per cycle = +2
+                              v.R_in := std_logic_vector(unsigned(A_out) + 1); -- A++
                           END IF;
                       ELSIF clk_cnt = "100" THEN
                           v.wr_R := '1';
@@ -784,9 +812,9 @@ BEGIN
                                   v.R_in := r.tmp_page & D_in; -- connect M(R(P))
                               END IF;
                           ELSE
-                              IF extraS1 = '1' THEN
-                                  v.R_in := std_logic_vector(unsigned(A_out) + 2); -- A+=2
-                              END IF;
+                              -- not taken: still reads R(P), then R(P)+1
+                              -- (datasheet Table 2), +1 per cycle = +2
+                              v.R_in := std_logic_vector(unsigned(A_out) + 1); -- A++
                           END IF;
                       ELSIF clk_cnt = "100" THEN
                           v.wr_R := '1';
@@ -806,63 +834,77 @@ BEGIN
                                   v.R_in := r.tmp_page & D_in; -- connect M(R(P))
                               END IF;
                           ELSE
-                              IF extraS1 = '1' THEN
-                                  v.R_in := std_logic_vector(unsigned(A_out) + 2); -- A+=2
-                              END IF;
+                              -- not taken: still reads R(P), then R(P)+1
+                              -- (datasheet Table 2), +1 per cycle = +2
+                              v.R_in := std_logic_vector(unsigned(A_out) + 1); -- A++
                           END IF;
                       ELSIF clk_cnt = "100" THEN
                           v.wr_R := '1';
                       END IF;
                   ELSIF N_out = "0100" THEN -- 0xC4 : NOP
-                      -- NOP
+                      -- no operation, but reads M(R(P)) in both cycles
+                      -- (datasheet Table 2)
+                      v.Do_MRD := '1';
+                      IF clk_cnt = "000" THEN
+                          v.wr_A := '1'; -- R(P) -> A
+                      END IF;
                   ELSIF N_out = "0101" THEN    -- 0xC5 : LSNQ : IF Q=0, R(P)+2 ELSE CONTINUE
                       -- select R(P)
+                      v.Do_MRD := '1'; -- both cycles read memory (datasheet Table 2)
                       IF clk_cnt = "000" THEN
                           v.wr_A := '1'; -- R(P) -> A
                       ELSIF clk_cnt = "011" THEN
-                          IF extraS1 = '1' THEN
-                              IF Q_out = '0' THEN
-                                  v.R_in := std_logic_vector(unsigned(A_out) + 2); -- A+=2
-                              END IF;
+                          -- taken: reads R(P), R(P)+1 (+1 per cycle); not
+                          -- taken: reads R(P) twice (datasheet Table 2)
+                          IF Q_out = '0' THEN
+                              v.R_in := std_logic_vector(unsigned(A_out) + 1); -- A++
+                          ELSE
+                              v.R_in := A_out;
                           END IF;
                       ELSIF clk_cnt = "100" THEN
                           v.wr_R := '1';
                       END IF;
                   ELSIF N_out = "0110" THEN    -- 0xC6 : LSNZ : IF D!=0, R(P)+2 ELSE CONTINUE
                       -- select R(P)
+                      v.Do_MRD := '1'; -- both cycles read memory (datasheet Table 2)
                       v.rd_D := '1';
                       IF clk_cnt = "000" THEN
                           v.wr_A := '1'; -- R(P) -> A
                       ELSIF clk_cnt = "011" THEN
-                          IF extraS1 = '1' THEN
-                              IF D_out /= "00000000" THEN
-                                  v.R_in := std_logic_vector(unsigned(A_out) + 2); -- A+=2
-                              END IF;
+                          -- taken: reads R(P), R(P)+1 (+1 per cycle); not
+                          -- taken: reads R(P) twice (datasheet Table 2)
+                          IF D_out /= "00000000" THEN
+                              v.R_in := std_logic_vector(unsigned(A_out) + 1); -- A++
+                          ELSE
+                              v.R_in := A_out;
                           END IF;
                       ELSIF clk_cnt = "100" THEN
                           v.wr_R := '1';
                       END IF;
                   ELSIF N_out = "0111" THEN    -- 0xC7 : LSNF : IF DF=0, R(P)+2 ELSE CONTINUE
                       -- select R(P)
+                      v.Do_MRD := '1'; -- both cycles read memory (datasheet Table 2)
                       IF clk_cnt = "000" THEN
                           v.wr_A := '1'; -- R(P) -> A
                       ELSIF clk_cnt = "011" THEN
-                          IF extraS1 = '1' THEN
-                              IF DF_out = '0' THEN
-                                  v.R_in := std_logic_vector(unsigned(A_out) + 2); -- A+=2
-                              END IF;
+                          -- taken: reads R(P), R(P)+1 (+1 per cycle); not
+                          -- taken: reads R(P) twice (datasheet Table 2)
+                          IF DF_out = '0' THEN
+                              v.R_in := std_logic_vector(unsigned(A_out) + 1); -- A++
+                          ELSE
+                              v.R_in := A_out;
                           END IF;
                       ELSIF clk_cnt = "100" THEN
                           v.wr_R := '1';
                       END IF;
                   ELSIF N_out = "1000" THEN    -- 0xC8 : LSKP : R(P)+2
-                      -- select R(P)
+                      -- select R(P); reads R(P), then R(P)+1 (datasheet
+                      -- Table 2 lists it with the long branches), +1 per cycle
+                      v.Do_MRD := '1';
                       IF clk_cnt = "000" THEN
                           v.wr_A := '1'; -- R(P) -> A
                       ELSIF clk_cnt = "011" THEN
-                          IF extraS1 = '1' THEN
-                              v.R_in := std_logic_vector(unsigned(A_out) + 2); -- A+=2
-                          END IF;
+                          v.R_in := std_logic_vector(unsigned(A_out) + 1); -- A++
                       ELSIF clk_cnt = "100" THEN
                           v.wr_R := '1';
                       END IF;
@@ -881,9 +923,9 @@ BEGIN
                                   v.R_in := r.tmp_page & D_in; -- connect M(R(P))
                               END IF;
                           ELSE
-                              IF extraS1 = '1' THEN
-                                  v.R_in := std_logic_vector(unsigned(A_out) + 2); -- A+=2
-                              END IF;
+                              -- not taken: still reads R(P), then R(P)+1
+                              -- (datasheet Table 2), +1 per cycle = +2
+                              v.R_in := std_logic_vector(unsigned(A_out) + 1); -- A++
                           END IF;
                       ELSIF clk_cnt = "100" THEN
                           v.wr_R := '1';
@@ -904,9 +946,9 @@ BEGIN
                                   v.R_in := r.tmp_page & D_in; -- connect M(R(P))
                               END IF;
                           ELSE
-                              IF extraS1 = '1' THEN
-                                  v.R_in := std_logic_vector(unsigned(A_out) + 2); -- A+=2
-                              END IF;
+                              -- not taken: still reads R(P), then R(P)+1
+                              -- (datasheet Table 2), +1 per cycle = +2
+                              v.R_in := std_logic_vector(unsigned(A_out) + 1); -- A++
                           END IF;
                       ELSIF clk_cnt = "100" THEN
                           v.wr_R := '1';
@@ -926,62 +968,74 @@ BEGIN
                                   v.R_in := r.tmp_page & D_in; -- connect M(R(P))
                               END IF;
                           ELSE
-                              IF extraS1 = '1' THEN
-                                  v.R_in := std_logic_vector(unsigned(A_out) + 2); -- A+=2
-                              END IF;
+                              -- not taken: still reads R(P), then R(P)+1
+                              -- (datasheet Table 2), +1 per cycle = +2
+                              v.R_in := std_logic_vector(unsigned(A_out) + 1); -- A++
                           END IF;
                       ELSIF clk_cnt = "100" THEN
                           v.wr_R := '1';
                       END IF;
                   ELSIF N_out = "1100" THEN    -- 0xCC : LSIE : IF IE=1, R(P)+2 ELSE CONTINUE
                       -- select R(P)
+                      v.Do_MRD := '1'; -- both cycles read memory (datasheet Table 2)
                       IF clk_cnt = "000" THEN
                           v.wr_A := '1'; -- R(P) -> A
                       ELSIF clk_cnt = "011" THEN
-                          IF extraS1 = '1' THEN
-                              IF IE_out = '1' THEN
-                                  v.R_in := std_logic_vector(unsigned(A_out) + 2); -- A+=2
-                              END IF;
+                          -- taken: reads R(P), R(P)+1 (+1 per cycle); not
+                          -- taken: reads R(P) twice (datasheet Table 2)
+                          IF IE_out = '1' THEN
+                              v.R_in := std_logic_vector(unsigned(A_out) + 1); -- A++
+                          ELSE
+                              v.R_in := A_out;
                           END IF;
                       ELSIF clk_cnt = "100" THEN
                           v.wr_R := '1';
                       END IF;
                   ELSIF N_out = "1101" THEN    -- 0xCD : LSQ : IF Q=1, R(P)+2 ELSE CONTINUE
                       -- select R(P)
+                      v.Do_MRD := '1'; -- both cycles read memory (datasheet Table 2)
                       IF clk_cnt = "000" THEN
                           v.wr_A := '1'; -- R(P) -> A
                       ELSIF clk_cnt = "011" THEN
-                          IF extraS1 = '1' THEN
-                              IF Q_out = '1' THEN
-                                  v.R_in := std_logic_vector(unsigned(A_out) + 2); -- A+=2
-                              END IF;
+                          -- taken: reads R(P), R(P)+1 (+1 per cycle); not
+                          -- taken: reads R(P) twice (datasheet Table 2)
+                          IF Q_out = '1' THEN
+                              v.R_in := std_logic_vector(unsigned(A_out) + 1); -- A++
+                          ELSE
+                              v.R_in := A_out;
                           END IF;
                       ELSIF clk_cnt = "100" THEN
                           v.wr_R := '1';
                       END IF;
                   ELSIF N_out = "1110" THEN    -- 0xCE : LSZ : IF D=0, R(P)+2 ELSE CONTINUE
                       -- select R(P)
+                      v.Do_MRD := '1'; -- both cycles read memory (datasheet Table 2)
                       v.rd_D := '1';
                       IF clk_cnt = "000" THEN
                           v.wr_A := '1'; -- R(P) -> A
                       ELSIF clk_cnt = "011" THEN
-                          IF extraS1 = '1' THEN
-                              IF D_out = "00000000" THEN
-                                  v.R_in := std_logic_vector(unsigned(A_out) + 2); -- A+=2
-                              END IF;
+                          -- taken: reads R(P), R(P)+1 (+1 per cycle); not
+                          -- taken: reads R(P) twice (datasheet Table 2)
+                          IF D_out = "00000000" THEN
+                              v.R_in := std_logic_vector(unsigned(A_out) + 1); -- A++
+                          ELSE
+                              v.R_in := A_out;
                           END IF;
                       ELSIF clk_cnt = "100" THEN
                           v.wr_R := '1';
                       END IF;
                   ELSIF N_out = "1111" THEN    -- 0xCF : LSDF : IF DF=1, R(P)+2 ELSE CONTINUE
                       -- select R(P)
+                      v.Do_MRD := '1'; -- both cycles read memory (datasheet Table 2)
                       IF clk_cnt = "000" THEN
                           v.wr_A := '1'; -- R(P) -> A
                       ELSIF clk_cnt = "011" THEN
-                          IF extraS1 = '1' THEN
-                              IF DF_out = '1' THEN
-                                  v.R_in := std_logic_vector(unsigned(A_out) + 2); -- A+=2
-                              END IF;
+                          -- taken: reads R(P), R(P)+1 (+1 per cycle); not
+                          -- taken: reads R(P) twice (datasheet Table 2)
+                          IF DF_out = '1' THEN
+                              v.R_in := std_logic_vector(unsigned(A_out) + 1); -- A++
+                          ELSE
+                              v.R_in := A_out;
                           END IF;
                       ELSIF clk_cnt = "100" THEN
                           v.wr_R := '1';
@@ -989,12 +1043,18 @@ BEGIN
                   END IF;
               WHEN "1101" => -- 0xDN : SEP
                   v.P_in := N_out;
-                  IF clk_cnt = "100" THEN
+                  v.NtoR := '1'; -- Select R(N): bus address per datasheet Table 2 (no access)
+                  IF clk_cnt = "000" THEN
+                      v.wr_A := '1'; -- R(N) -> A
+                  ELSIF clk_cnt = "100" THEN
                       v.wr_P  := '1'; -- P=N
                   END IF;
               WHEN "1110" => -- 0xEN : SEX
                   v.X_in  := N_out;
-                  IF clk_cnt = "100" THEN
+                  v.NtoR := '1'; -- Select R(N): bus address per datasheet Table 2 (no access)
+                  IF clk_cnt = "000" THEN
+                      v.wr_A := '1'; -- R(N) -> A
+                  ELSIF clk_cnt = "100" THEN
                       v.wr_X  := '1'; -- X=N
                   END IF;
               WHEN "1111" =>
@@ -1061,7 +1121,10 @@ BEGIN
                   ELSIF N_out = "0110" THEN -- 0xF6 : SHR : D >>= 1; LSB(D)->DF; 0->MSB(D)
                       v.rd_D := '1';
                       v.alu_oper := c_ALU_SHR;
-                      IF clk_cnt = "100" THEN
+                      v.XtoR := '1'; -- Select R(X): bus address per datasheet Table 2 (no access)
+                      IF clk_cnt = "000" THEN
+                          v.wr_A := '1'; -- R(X) -> A: bus address per datasheet Table 2 (no access)
+                      ELSIF clk_cnt = "100" THEN
                           v.wr_D  := '1'; -- alu_out -> D
                           v.wr_DF := '1'; -- carry -> DF
                       END IF;
@@ -1151,7 +1214,9 @@ BEGIN
                   ELSIF N_out = "1110" THEN -- 0xFE : SHL : D <<= 1; MSB(D)->DF; 0->LSB(D)
                       v.rd_D := '1';
                       v.alu_oper := c_ALU_SHL;
-                      IF clk_cnt = "100" THEN
+                      IF clk_cnt = "000" THEN
+                          v.wr_A := '1'; -- R(P) -> A: bus address per datasheet Table 2 (no access)
+                      ELSIF clk_cnt = "100" THEN
                           v.wr_D  := '1'; -- alu_out -> D
                           v.wr_DF := '1'; -- carry -> DF
                       END IF;
@@ -1172,6 +1237,13 @@ BEGIN
               WHEN OTHERS =>
             END CASE;
         WHEN c_S1_IDLE =>
+            IF r.idl = '1' THEN -- idling after IDL (not LOAD mode)
+                v.DtoR := '1'; -- select R(0)
+                v.Do_MRD := '1';
+                IF clk_cnt = "000" THEN
+                    v.wr_A := '1'; -- R(0) -> A
+                END IF;
+            END IF;
         WHEN c_S2_DMA =>
             v.DtoR := '1'; -- Select R(0)
             IF dma_in = '1' THEN
@@ -1194,6 +1266,7 @@ BEGIN
                 END IF;
             END IF;
         WHEN c_S3_INTERRUPT =>
+          v.idl := '0';
         WHEN OTHERS =>
       END CASE;
 

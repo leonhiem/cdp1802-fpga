@@ -13,7 +13,7 @@
 #
 # Usage: gen_alu_prog.py <opcode-hex> <out-prefix>
 #   writes <out-prefix>.bin (for the checker) and <out-prefix>.hex (one
-#   byte per line, for tb_cdp1802_alu.vhd)
+#   byte per line, for tb_cdp1802_lockstep.vhd)
 #
 # Program layout (all short branches stay inside page 0x00):
 #   R8 -> operand byte (memory ops) or the first immediate byte
