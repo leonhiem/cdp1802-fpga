@@ -665,7 +665,7 @@ BEGIN
                           v.wr_DF := '1'; -- carry -> DF
                           v.wr_R := '1';
                       END IF;
-                  ELSIF N_out = "1110" THEN -- 0x7E : RSHL : D >>= 1; MSB(D)->DF; DF->LSB(D)
+                  ELSIF N_out = "1110" THEN -- 0x7E : RSHL : D <<= 1; MSB(D)->DF; DF->LSB(D)
                       v.rd_D := '1';
                       v.alu_oper := c_ALU_RSHL;
                       IF clk_cnt = "100" THEN

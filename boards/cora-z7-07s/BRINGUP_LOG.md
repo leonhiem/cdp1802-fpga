@@ -2251,3 +2251,104 @@ Comments in `cdp1854.vhd`, `cs1800_prcx18_top.vhd`,
 `build_project_prcx18.tcl` and `gen_load_prcx18_rom.py` are corrected.
 The one real remaining problem is the Console Task respawn on the Cora
 hardware, not reproduced in simulation.
+
+## 2026-09-19: Console Task respawn -- root cause: SHRC/SHLC ignored DF
+
+**Symptom.** On the Cora, the console printed `^@` echoes and
+PRCX-18 kept starting new console tasks (`_08>` -> `_10>` -> `_18>` ...).
+The real CS1800 just waits at `_08> `.
+
+**It depends on LC.** With a fresh JTAG program, reset held during the
+ROM load and LC frozen (`ctrl_in = 0x48`), the Cora stays at `_08> `
+for 90 s: one banner, no respawn, no `^@`. The real PRCX-18 also runs
+without LC (user, real hardware), so the fault had to be in how our
+core handles the LC interrupt. Simulation with LC at 50 Hz
+(`g_lc_half_period => 40000`) reproduced it: prompt at 0.430 s, `^@`
+at 0.862 / 1.262 / 2.722 / 2.902 s. Each time the console resumed at
+`0x0C42` with DF=0 ("character available") although DA was never 1,
+and echoed buffer byte `0x00` as `^@`.
+
+**PRCX-18's interrupt handler.** It runs in RAM page `0x5C`, copied
+from ROM `0x0190-0x01FF`. It is entered with R1 = `0x5CD3` (or
+`0x5CD1`, `SKP` over the `RET`):
+
+```
+5CD3: 22     DEC R2
+5CD4: 78     SAV            ; T (interrupted X,P)
+5CD5: 22     DEC R2
+5CD6: 73     STXD           ; D
+5CD7: 76     SHRC           ; DF -> bit 7 of D
+5CD8: 73     STXD           ; ... and saved
+      83 73 93 73 8F 73 9F 73   ; R3, RF
+      91 B3 F8 00 A3 D3         ; R3 = 5C00, SEP R3 (dispatcher)
+exit:
+5CE7: E2 12 42 BF 42 AF 42 B3 42 A3   ; restore RF, R3
+5CF1: 42 7E  LDA R2 / SHLC  ; bit 7 -> DF (restores DF)
+5CF3: 42 7B  LDA R2 / SEQ   ; restore D, Q=1
+5CF5: 30 D2  BR 5CD2 -> RET ; restore X,P, IE=1
+```
+
+It saves DF by shifting it into D with SHRC and restores it with SHLC.
+
+**The bug.** In `alu.vhd` both shift-through-carry operations were
+plain rotates that ignored DF:
+
+```vhdl
+WHEN c_ALU_RSHR => tmp <= alu_in(0) & alu_in(0) & alu_in(7 DOWNTO 1); -- bit 7 <- D0, not DF
+WHEN c_ALU_RSHL => tmp <= alu_in & alu_in(7);                          -- bit 0 <- D7, not DF
+```
+
+So the handler saved D0 instead of DF, and every interrupted task
+resumed with a DF that depended on D, not its own. The console
+interrupted between its status poll and `BNF 0C4C` then took the
+"character available" path. Fixed to shift `carry_in` (DF) in:
+
+```vhdl
+WHEN c_ALU_RSHR => tmp <= alu_in(0) & carry_in & alu_in(7 DOWNTO 1);
+WHEN c_ALU_RSHL => tmp <= alu_in & carry_in;
+```
+
+`test_program_pkg.vhd`'s expected SHLC result is corrected from `0x3A`
+(old rotate) to `0x3B` (0x1D << 1 with DF=1 from the preceding SHRC).
+Its SHRC case (0x85 -> 0xC2) gave the right answer by coincidence: DF
+and D0 were both 1.
+
+**How it was found: lockstep check against an independent 1802 model.**
+`boards/cora-z7-07s/lockstep1802.py` replays a per-machine-cycle bus
+log from the VHDL core (a local testbench logs SC, address, data and
+nMRD at each TPB, plus every nMWR write) through an instruction-level
+CDP1802 model written from the datasheet. Read data comes from the log,
+and a ROM+write memory image cross-checks every memory read. It
+flags any difference in fetch address, access address, written data,
+or an interrupt vectoring with IE=0. On the 50 Hz LC run (0.93 s,
+230,890 instructions, 24 interrupts) the **only** mismatches were
+8 writes, all `STXD` at `0x5CD8` right after SHRC. All other
+instructions matched. After the fix: 230,893 instructions,
+**0 mismatches**, and no `^@` in the same window. This also answers the
+earlier "how do we know no other instruction is broken" question more
+strongly than the manual audit: every instruction PRCX-18 executes in
+its first ~0.9 s agrees with the reference model.
+
+**Also seen (not fixed, no functional effect):** `control.vhd` enters
+S3 when INT is pending even with IE=0. S3 then skips the T/P/X
+update, so it is one wasted machine cycle per LC edge. A real 1802
+does not enter S3 with IE=0. The checker counts these as "phantom S3"
+and verifies they never vector.
+
+**Verified on the Cora (2026-09-19).** Rebuilt bitstream, fresh JTAG
+program, ROM loaded with reset held, released with `ctrl_in = 0x68`
+(LC running, 50 Hz = 4 MHz / 2x40000):
+- 120 s listen: banner, `-SYS-Starting Console Task-`, `_08> `,
+  then nothing. No respawn, no `^@`.
+- Injected `<CR>` x3, then `DMP<CR>`: each `<CR>` gives a new `_08> `
+  (same as the real CS1800), and `DMP` echoes and starts dumping:
+
+```
+_08> DMP
+ADDR   0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F       ASCII
+4000  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+4010  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+...
+```
+
+(Output is cut off only by the ~35 B/s devmem drain within the 90 s window.)

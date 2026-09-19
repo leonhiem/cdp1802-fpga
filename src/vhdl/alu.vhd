@@ -59,10 +59,14 @@ BEGIN
         tmp <= alu_in(0) & "0" & alu_in(7 DOWNTO 1);
       WHEN c_ALU_SHL => -- <<
         tmp <= alu_in & "0";
+      -- Shift through carry (SHRC/SHLC): DF shifts in, the bit shifted out
+      -- goes to DF. These used to rotate D's own bit back in, ignoring DF --
+      -- which broke PRCX-18's interrupt handler (it saves DF with SHRC and
+      -- restores it with SHLC), so every interrupted task resumed with DF=0.
       WHEN c_ALU_RSHR => -- >>
-        tmp <= alu_in(0) &  alu_in(0) & alu_in(7 DOWNTO 1);
+        tmp <= alu_in(0) & carry_in & alu_in(7 DOWNTO 1);
       WHEN c_ALU_RSHL => -- <<
-        tmp <= alu_in & alu_in(7);
+        tmp <= alu_in & carry_in;
 
       -- arithmetic operations:
       WHEN c_ALU_U_ADD => -- unsigned addition
