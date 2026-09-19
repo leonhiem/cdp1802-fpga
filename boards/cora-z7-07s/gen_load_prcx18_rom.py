@@ -30,6 +30,10 @@ def main():
 
     print("#!/bin/sh")
     print("set -e")
+    # Hold the CPU in reset for the whole load -- otherwise it keeps
+    # running (ctrl_in keeps its previous value, e.g. 0x68 after an
+    # earlier run) while its own ROM is overwritten underneath it.
+    print("busybox devmem 0x41200000 32 0x01   # reset=1 during the load")
     print("echo LOADING_ROM")
     for i in range(0, len(rom) - (len(rom) % 4), 4):
         word = rom[i] | (rom[i + 1] << 8) | (rom[i + 2] << 16) | (rom[i + 3] << 24)

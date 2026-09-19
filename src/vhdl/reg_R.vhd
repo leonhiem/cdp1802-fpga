@@ -62,7 +62,12 @@ TYPE t_reg IS RECORD
     reg : t_reg_arr;
 END RECORD;
 
-SIGNAL r, nxt_r : t_reg;
+-- Explicit power-up value: on the FPGA these flip-flops configure to 0
+-- anyway; without this GHDL starts them at 'U', and real ROM code that
+-- reads a never-written register (PRCX-18 uses R7.lo before ever setting
+-- it) spreads X through the simulation, so sim and hardware diverge.
+-- Reset still only clears R0, as on a real CDP1802.
+SIGNAL r, nxt_r : t_reg := (reg => (OTHERS => (OTHERS => '0')));
 
 BEGIN
 
