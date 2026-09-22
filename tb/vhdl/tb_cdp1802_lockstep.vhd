@@ -19,7 +19,8 @@
 --     EF1..EF4        = io_latch(7) bits 0..3 (1 = flag active, nEF low)
 --     INT             controlled by io_latch(6):
 --                       bit 0 = request now,
---                       bit 1 = request after g_int_delay clocks,
+--                       bit 1 = request g_int_delay clocks after the
+--                               last OUT 6 (each OUT 6 restarts it),
 --                       writing 0x00 withdraws the request
 --   No DMA.
 --
@@ -98,6 +99,7 @@ ARCHITECTURE tb OF tb_cdp1802_lockstep IS
   SIGNAL bus_data : STD_LOGIC_VECTOR(7 DOWNTO 0);
   SIGNAL nef      : STD_LOGIC_VECTOR(3 DOWNTO 0);
   SIGNAL nint     : STD_LOGIC := '1';
+  SIGNAL int_restart : STD_LOGIC := '0';
   SIGNAL done     : BOOLEAN := FALSE;
 
 BEGIN
@@ -153,8 +155,12 @@ BEGIN
   p_io_out : PROCESS (clk)
   BEGIN
     IF rising_edge(clk) THEN
+      int_restart <= '0';
       IF tpb = '1' AND sc = "01" AND n /= "000" AND nmrd = '0' THEN
         io_latch(to_integer(unsigned(n))) <= bus_data;
+        IF n = "110" THEN
+          int_restart <= '1';   -- every OUT 6 restarts the delay
+        END IF;
       END IF;
     END IF;
   END PROCESS;
@@ -167,7 +173,10 @@ BEGIN
         nint <= '0';
         cnt := 0;
       ELSIF io_latch(6)(1) = '1' THEN
-        IF cnt >= g_int_delay THEN
+        IF int_restart = '1' THEN      -- a new OUT 6: start the delay again
+          nint <= '1';
+          cnt := 0;
+        ELSIF cnt >= g_int_delay THEN
           nint <= '0';
         ELSE
           cnt := cnt + 1;

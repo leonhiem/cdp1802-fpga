@@ -41,6 +41,15 @@ ROM_END = 0x2000
 RAM_LO, RAM_HI = 0x4000, 0x5FFF
 
 
+def hx(t):
+    """Hex field; an undefined value ('XX', 'UU', ...) becomes 0x100, which
+    never equals a real byte, so it shows up as a mismatch."""
+    try:
+        return int(t, 16)
+    except ValueError:
+        return 0x100
+
+
 def load_events(path):
     ev = []
     with open(path) as f:
@@ -49,11 +58,11 @@ def load_events(path):
             if not p:
                 continue
             if p[0] == 'C' and len(p) in (5, 7):
-                q = int(p[5]) if len(p) == 7 else None
-                n = int(p[6], 16) if len(p) == 7 else None
-                ev.append(('C', int(p[1], 16), int(p[2], 16), int(p[3], 16), p[4] == 'R', q, n))
+                q = hx(p[5]) if len(p) == 7 else None
+                n = hx(p[6]) if len(p) == 7 else None
+                ev.append(('C', hx(p[1]), hx(p[2]), hx(p[3]), p[4] == 'R', q, n))
             elif p[0] == 'W' and len(p) == 3:
-                ev.append(('W', int(p[1], 16), int(p[2], 16)))
+                ev.append(('W', hx(p[1]), hx(p[2])))
     return ev
 
 
@@ -286,6 +295,7 @@ def main():
         hist.append(before)
         n_instr += 1
         op_count[op] += 1
+        io6_before = io[6]   # an OUT 6 that withdraws a request can race with it
         if ex[0]['n'] is not None:
             exp_n = (lo & 7) if hi == 0x6 and lo not in (0, 8) else 0
             for x in ex:
@@ -515,11 +525,15 @@ def main():
             err(f"S3 cycle with IE=0 after {op:02X} at {pc:04X}")
             i += 1
         elif i < len(cyc) and cyc[i]['sc'] == 3:
-            if flat and io[6] == 0:
+            if flat and io[6] == 0 and io6_before == 0:
+                # (a request withdrawn by this very instruction may still be
+                # sampled at its end: the INT line changes after the OUT)
                 err(f"S3 after {op:02X} at {pc:04X} with no interrupt requested")
             int_missed = 0
             n_int += 1
             nowrite(cyc[i], "S3")
+            if cyc[i]['rd']:   # Table 2: S3 has MRD=1, MWR=1
+                err(f"Table 2: S3 after {op:02X} at {pc:04X}: nMRD asserted during the interrupt cycle")
             c.T = (c.X << 4) | c.P
             c.X, c.P, c.IE = 2, 1, 0
             hist.append(f"      ---- INTERRUPT (T={c.T:02X}, R1={c.R[1]:04X}) ----")

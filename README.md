@@ -224,6 +224,22 @@ coverage: complete
 PASS: every opcode (0x68 excluded) and every branch/skip outcome, 0 mismatches
 ```
 
+### Layer 1d: random programs (~3 minutes per 200 seeds on 12 cores, no ROM, no hardware)
+
+```
+sim/ghdl/isa/run_random.sh               # seeds 1..200
+sim/ghdl/isa/run_random.sh 1001 500      # seeds 1001..1500
+sim/ghdl/isa/run_random.sh 42 1          # reproduce one seed
+```
+
+Each seed produces a random but well-formed program (random instructions
+and operands, branches and skips on random conditions, SEP calls,
+interrupts at random moments, IDL), which runs on the bare core and is
+checked cycle by cycle by the lockstep model. The same seed always gives
+the same program, so a failure is reproducible: its files stay in
+`sim/ghdl/isa/run_random/seed_<n>/` (`prog.bin`, `cyc.log`, `check.txt`).
+Pass = `PASS: all N random programs (...), 0 mismatches`.
+
 ### Layer 2: real-ROM lockstep check (~10 minutes, needs your ROM dump)
 
 ```

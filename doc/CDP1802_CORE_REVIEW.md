@@ -15,6 +15,7 @@ The day-by-day account is in `boards/cora-z7-07s/BRINGUP_LOG.md`.
 | 2 | `alu.vhd` (SHRC `0x76`, SHLC `0x7E`) | rotate *without* carry: DF was ignored | interrupt handler saved/restored DF wrongly, so an interrupted task resumed with a random DF. The console "received" phantom `^@` characters and was respawned (`_10>`, `_18>`...) | fixed, `d82e04a` |
 | 3 | `control.vhd` (S3) | the state machine entered S3 on INT even when IE=0 (without vectoring) | the S3 cycle acknowledged the LC interrupt, so every 50 Hz tick arriving while interrupts were disabled was **lost**; an IDL with IE=0 also woke up | fixed (TODO 1) |
 | 4 | `instr.vhd` (bus cycles) | memory reads missing or at the wrong address in IDL, IRX, SKP, NOP, long skips, LSKP and not-taken long branches, versus the datasheet's Table 2 | none for PRCX-18 (results were right); matters for memory-mapped hardware with read side effects, e.g. in the real backplane | fixed (TODO 2.2) |
+| 5 | `control.vhd` (S3) | nMRD stayed active for half a clock into the interrupt cycle after a reading instruction | none for PRCX-18; a device with a read side effect would see a spurious read at every interrupt | fixed (TODO 2.3) |
 
 Everything else checked out. Over the 0.93 s of PRCX-18 execution checked
 by the lockstep model (below), 230,893 instructions using **166 distinct
@@ -215,12 +216,33 @@ of exactly these instructions (plus one S3 row that follows an IDL).
 Only address, data and nMRD change; there are no changes in time, SC,
 nMWR, Q or any fetch row, and the row count is unchanged.
 
+## Bug 5: a spurious memory read at the start of every interrupt (control.vhd) -- TODO 2.3, fixed
+
+Found by the random-program test (TODO 2.3), once the checker also
+compared the S3 cycle with Table 2 (S3: MRD=1, MWR=1, no memory access).
+When an interrupt followed an instruction that reads memory (RET, LDA,
+OUT, ...), nMRD stayed low for the first half clock of the S3 cycle.
+
+**Cause:** `instr.vhd` registers `Do_MRD`/`Do_MWR` on the rising clock
+edge, while `control.vhd` changes `state` on the falling edge. So an
+execute cycle's `Do_MRD` runs half a clock into the next cycle. Before an
+S0 or S1 cycle that is invisible, because those read anyway. Before S3 it
+is an extra read.
+
+**Fix:** `control.vhd` masks `Do_MRD`/`Do_MWR` while the state is S3.
+Nothing else changes: the golden references are identical. The same
+half-clock overlap into a DMA cycle (S2) is left for TODO 2.4.
+
 ## Not core bugs, but found on the way
 
 - **reg_R power-up (`e9dc776`):** R1-RF started as `'U'` in simulation.
   The real chip leaves them undefined too, and the FPGA powers them to 0,
   but PRCX-18 reads R7.lo before writing it, so GHDL spread X through the
   whole simulation. Now explicitly 0. Reset still only clears R0.
+- **T, D, DF power-up (TODO 2.3):** the same for `reg.vhd` (T, D, ...)
+  and `ff.vhd` (DF, ...): a random program doing `SAV` before any
+  interrupt or `MARK` stored an undefined T (`XX` in the log). Now
+  explicitly 0, matching the FPGA; reset behaviour unchanged.
 - **SKP (`0x38`) bus cycle:** the core did no memory read in the SKP
   execute cycle. The datasheet's Table 2 says it reads; fixed as part of
   bug 4.
@@ -339,9 +361,34 @@ The lockstep run proves the instructions PRCX-18 uses. To prove the rest:
    It fails unless the coverage is complete. **Result: 0 mismatches, after
    fixing bug 4** (the functional results were right before; the bus
    activity was not).
-3. **Random instruction streams.** Generate random but well-formed
-   programs (with a fixed R-register setup so memory accesses stay in
-   RAM), run them in lockstep. It finds combinations nobody thought of.
+3. **Random instruction streams -- done, all PASS.**
+   `sim/ghdl/isa/run_random.sh [first_seed] [n_seeds]` (README, "Layer
+   1d"). For each seed, `gen_random_prog.py` generates a random but
+   well-formed program of about 3,000 items (about 8,400 executed
+   instructions):
+   - random ALU, register, memory, X and I/O instructions with random
+     operands;
+   - short and long branches and skips on random conditions (D, DF, Q
+     and EF, with the EF lines set by random `OUT 7` data);
+   - SEP subroutines;
+   - interrupts: immediate, delayed so that they land at random points,
+     requested while disabled, and waking an IDL;
+   - `MARK`;
+   - regular observation points that store D and registers and branch
+     on DF.
+
+   Safety rules keep it well-formed: R1/R2/R3/RE are reserved, pointer
+   registers stay in a data window, and `OUT 6` is only used in the
+   interrupt macros. Each program is checked with `lockstep1802.py
+   --flat --strict-address`.
+   **Result: 1,000 seeds, 8,432,868 instructions, 111,732 interrupts,
+   0 mismatches** (23 minutes on 11 parallel jobs). On the way it found
+   bug 5 (spurious read in S3) and the undefined T/D/DF power-up values,
+   plus three testbench/generator issues. Every `OUT 6` now restarts the
+   interrupt delay. The IDL macro withdraws an older request before
+   arming a new one. And the checker accepts the real race where a
+   request withdrawn by an `OUT 6` is still sampled at the end of that
+   instruction.
 4. **Interrupt and DMA edge cases:** interrupt arriving on the last
    sub-cycle of every instruction type, directly after `RET` and `DIS`,
    during `IDL`, during a long branch's second execute cycle. DMA-in/out
@@ -420,3 +467,34 @@ loop, which starts a `busybox devmem` process for every GPIO access (about
 - Longer term: route the CDP1854's TX/RX to a real UART (PL pins or the
   PS UART via EMIO) so a normal terminal program (`minicom`) can connect,
   which is also closer to the real CS1800's serial port.
+
+### TODO 6: the core in the real CS1800 backplane
+What has to change or be verified when the FPGA's CDP1802 drives the real
+backplane, instead of the Cora's internal memory/UART models:
+- **Electrical interface:** the backplane is 5 V CMOS (4000-series and the
+  CDP1854/memory cards); the Zynq I/O is 3.3 V. Needs level shifters,
+  bidirectional ones with a direction control for the data bus
+  (`DATA_OE`), and open-drain handling for `nINT` (and `nDMA`).
+- **Multiplexed address bus:** inside the FPGA the memory uses `A_full`.
+  The real memory cards latch the high address byte from `ADDR` on TPA
+  (4042 latches), so the core's 8-bit `ADDR` + TPA timing must be
+  datasheet-exact (TODO 2.5).
+- **Pin timing (TODO 2.5):** TPA/TPB width and position, MRD/MWR windows,
+  data setup/hold at the real clock, N lines during I/O, SC codes.
+  Known: TPA is suppressed in IDL, but should only be in LOAD mode.
+  The execute-cycle address/access per instruction already matches
+  Table 2 (bug 4).
+- **Clock and control inputs:** clock from the backplane (or the Cora
+  generating it); `nCLEAR`/`nWAIT` from the backplane's reset/run logic,
+  with the real reset timing; LOAD mode with DMA loading (TODO 2.6).
+- **DMA:** the backplane can do DMA-in/out; the S2 cycle is not yet
+  covered by the lockstep model (TODO 2.4).
+- **Remove the internal models:** the CDP1854 UART, the CD4076 I/O
+  latch, the memory, the LC generator and the software TX/RX FIFOs become
+  real cards. Keep them only as a simulation/Cora-standalone option.
+- **Undefined behaviour real software might rely on:** 0x68 (on the
+  1802 undefined; the core does "INP with N=0"); registers not cleared at
+  power-up (the core powers them to 0); the value of D/DF/Q after reset.
+  Compare with the real chip where possible (TODO 2.8).
+- **Real-machine test:** the same PRCX-18 session as on the Cora, plus
+  the checksum programs of TODO 2.8, on the real backplane.

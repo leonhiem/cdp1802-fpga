@@ -43,7 +43,8 @@ TYPE t_reg IS RECORD
     ff : STD_LOGIC;
 END RECORD;
 
-SIGNAL r, nxt_r : t_reg;
+-- Explicit power-up value: see reg.vhd (DF is not reset on a real 1802).
+SIGNAL r, nxt_r : t_reg := (ff => '0');
 
 
 

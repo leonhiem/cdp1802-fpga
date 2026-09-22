@@ -2406,3 +2406,31 @@ address. All fixed in `instr.vhd` (details: `doc/CDP1802_CORE_REVIEW.md`,
 bug 4). Verified in simulation (coverage, exhaustive ALU, PRCX-18
 lockstep) and on the Cora: boot, `<CR>` x3, full `DMP` and closing
 prompt, LC at 50 Hz.
+
+## 2026-09-22: random instruction streams (TODO 2.3) -- a spurious read at every interrupt
+
+`sim/ghdl/isa/run_random.sh`: per seed a random but well-formed program
+(random instructions/operands, branches and skips on random conditions,
+SEP calls, interrupts at random moments, IDL), checked cycle by cycle by
+`lockstep1802.py --flat --strict-address`. **1,000 seeds, 8,432,868
+instructions, 111,732 interrupts, 0 mismatches.**
+
+Found on the way:
+- **Bug 5** (`control.vhd`): after an instruction that reads memory, nMRD
+  stayed low for the first half clock of the S3 (interrupt) cycle --
+  `instr.vhd` registers `Do_MRD` on the rising edge while the state
+  changes on the falling edge. Table 2 says S3 has no memory access, so
+  every interrupt began with a spurious read. Fixed by masking
+  `Do_MRD`/`Do_MWR` in S3; golden references unchanged.
+- **T/D/DF power-up** (`reg.vhd`, `ff.vhd`): a random `SAV` before any
+  interrupt or `MARK` stored an undefined T (`XX` in the log). Explicit 0
+  power-up, as for `reg_R` earlier; the FPGA does the same, and reset
+  behaviour is unchanged.
+- Three testbench/generator issues (not core bugs): every `OUT 6` now
+  restarts the interrupt delay, the IDL macro withdraws an older request
+  first, and the checker accepts the real race where a request withdrawn
+  by an `OUT 6` is still sampled at the end of that instruction.
+
+Verified after the fixes: random 1,000 seeds, ISA coverage, exhaustive
+ALU (22/22), PRCX-18 lockstep (205,538 instructions), golden references
+unchanged, and on the Cora: boot, `<CR>` x3, full `DMP`, closing prompt.

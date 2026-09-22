@@ -1,1 +1,4 @@
 run/
+run_random/
+.lock_random
+__pycache__/

@@ -78,6 +78,7 @@ ARCHITECTURE str OF control IS
 
   SIGNAL mode_in  : STD_LOGIC_VECTOR(1 DOWNTO 0);
   SIGNAL clk_cnt  : STD_LOGIC_VECTOR(2 DOWNTO 0);
+  SIGNAL in_S3 : STD_LOGIC;
   SIGNAL r, nxt_r : t_reg;
   SIGNAL f, nxt_f : f_reg;
 
@@ -268,8 +269,15 @@ BEGIN
   rst   <= r.rst;
   tpa   <= r.tpa;
   tpb   <= f.tpb;
-  nMRD  <= NOT (r.MRD OR Do_MRD);
-  nMWR  <= NOT (r.MWR OR Do_MWR);
+  -- Do_MRD/Do_MWR come from instr.vhd, which registers them on the rising
+  -- edge while r.state changes on the falling edge: after a reading
+  -- instruction, Do_MRD stayed active for half a clock into the next
+  -- cycle. Before S0/S1 that is harmless (they read too), but S3 must
+  -- have no memory access at all (datasheet Table 2): an interrupt would
+  -- otherwise start with a spurious read. So mask them in S3.
+  nMRD  <= NOT (r.MRD OR (Do_MRD AND NOT in_S3));
+  nMWR  <= NOT (r.MWR OR (Do_MWR AND NOT in_S3));
+  in_S3 <= '1' WHEN r.state = c_S3_INTERRUPT ELSE '0';
   wr_T  <= r.wr_T;
   preset_P  <= r.preset_P;
   preset_X  <= r.preset_X;
