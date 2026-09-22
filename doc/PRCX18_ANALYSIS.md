@@ -286,7 +286,25 @@ read/complement/verify/restore test per byte:
 I.e. the RAM bounds are stored as two big-endian words **four pages
 below the top of RAM**: `bottom` at `top_page-4:FC`, `top` at
 `top_page-4:FE`. On the minimal 8K machine that is `0x5BFC = 40 00`,
-`0x5BFE = 5F FF` -- identical on real hardware and in simulation.
+`0x5BFE = 5F FF` -- identical on real hardware and in simulation. With a
+fully populated 32K memory card (RAM 0x2000-0x7FFF, top `0x7FFF`) it is
+`0x7BFC = 40 00`, `0x7BFE = 7F FF`.
+
+**Reading them from the console** (user, 2026-09-22): `DMP` takes a hex
+page number, so `DMP 7B` dumps that page and shows the bounds directly --
+the last row of the page, on the Cora with the 32K card:
+
+```
+_08> DMP 7B
+...
+7BF0  40 00 40 00 40 00 40 00 40 00 71 FF 40 00 7F FF  @.@.@.@.@.q.@...
+                                          ^^^^^ ^^^^^
+                                          bottom  top
+```
+
+(The Cora's AXI window gives the same bytes from Linux:
+`busybox devmem 0x40007BFC 32` -> `0xFF7F0040`.) A quick way to see what
+a machine actually detected, on the real rack as well as on the Cora.
 
 Consequences, both confirmed:
 - Any memory model that **aliases** high addresses onto a small RAM

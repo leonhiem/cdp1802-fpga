@@ -289,6 +289,20 @@ _08>
   this 24KB card they sit at `7F`/`77`/`74` (top `0x7FFF`). On a machine
   with a single 8KB RAM IC at `0x4000` (top `0x5FFF`) the same three tasks
   report `5F`/`57`/`54` -- exactly 0x2000 lower.
+- `DMP` takes a hex **page** number, and PRCX-18 keeps the RAM bounds it
+  detected four pages below the top of RAM, at offsets `FC` (bottom) and
+  `FE` (top). So on this machine `DMP 7B` shows them in its last row:
+
+  ```
+  _08> DMP 7B
+  ...
+  7BF0  40 00 40 00 40 00 40 00 40 00 71 FF 40 00 7F FF  @.@.@.@.@.q.@...
+                                            ^^^^^ ^^^^^
+                                            bottom  top
+  ```
+
+  i.e. RAM `0x4000`-`0x7FFF` -- the same two words the devmem example
+  above reads as `0xFF7F0040`. On an 8KB machine the page is `5B`.
 - **Exit with Ctrl-]**. Ctrl-C is passed through to PRCX-18 as a normal
   character (a real terminal program needs its own escape key for the
   same reason).
