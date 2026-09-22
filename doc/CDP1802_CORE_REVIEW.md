@@ -505,20 +505,43 @@ The lockstep run proves the instructions PRCX-18 uses. To prove the rest:
    the model's ALU definitions against real silicon, closing the caveat
    in item 1.
 
-### TODO 3: maximum RAM size on the Cora (32 KB)
-64 KB of RAM does not fit (80 RAMB36 needed, 50 available on the
-XC7Z007S). The target is to allow up to 32 KB (the largest that fits),
-with the 8 KB minimum as the default:
-- Make the chip-select decode in `cs1800_prcx18_memory.vhd` general
-  (it currently takes the RAM index from address bits, which is only
-  valid up to 16 KB at `0x4000`), and keep Block RAM inference (single
-  unconditional read, see the file's header).
-- Check with the real CS1800 which address range a 32 KB configuration
-  uses, so the decode matches the real memory cards.
-- Re-investigate the earlier 32 KB real-hardware-only hang at `0x006C`
-  (seen before the INP, SHRC and decode fixes; it may already be gone).
-- Verify the PRCX-18 RAM test reports the right bounds for each size,
-  as was done for 8 KB.
+### TODO 3: the real 32KB memory card -- done
+The real card carries four 8KB ICs and the first one is the ROM, so a
+fully populated card is **ROM 0x0000-0x1FFF, RAM 0x2000-0x7FFF (24KB)**,
+with 0x8000-0xFFFF void (the second card absent). That is now the Cora's
+configuration (`g_ram_base_addr = 0x2000`, `g_ram_words = 6144`).
+
+The decode already used all 16 address lines, but the *index* did not:
+the RAM offset was a bit-slice of the address, which is only the same
+thing while the window is aligned to its own size. That holds for 8KB at
+0x4000 and fails for 24KB at 0x2000 (and for 32KB at 0x4000, where 0x8000
+would alias onto 0x0000). `cs1800_prcx18_memory.vhd` now computes the
+offset with a real `address - base` subtraction, so any size at any base
+works, and Port B (the AXI loading path) is a flat window over the whole
+array -- ROM at offset 0, RAM behind it -- instead of selecting RAM by
+address bits and indexing it with the same slice. Nothing aliases on
+either port; anything past the end of the array is not backed at all.
+
+Proof, not assertion: `boards/cora-z7-07s/sim/tb_prcx18_memory_map.vhd`
+(in `boards/cora-z7-07s/sim/run.sh`) walks **all 65,536 addresses** in
+both configurations. It writes an address-derived byte (high and low byte
+mixed, so any two addresses differing in any bit get different data) to
+every address, then reads every address back:
+- RAM: every address returns its own byte -- any shared storage would
+  show up as a wrong byte, naming the address;
+- ROM: unchanged against a snapshot taken first (writes ignored);
+- void: reads 0xFF and ignores writes.
+Counts for the card: 24,576 RAM + 8,192 ROM + 32,768 void. Mutation
+check: put the old bit-slice index back and the test stops immediately
+(the index runs past the array); in synthesis that same index would have
+aliased silently.
+
+PRCX-18 on this map (lockstep, 295,626 instructions, 0 mismatches) finds
+RAM 0x4000-0x7FFF and stores the bounds at 0x7BFC/0x7BFE as `40 00` /
+`7F FF` -- the same structure as the 8KB config's `40 00` / `5F FF` at
+0x5BFC. The RAM at 0x2000-0x3FFF is present but never touched: the sweep
+starts hard-coded at 0x4000, because on a real rack that slot is the
+second EPROM (macro assembler).
 
 ### TODO 4: cleanup and release check
 - Remove or gate the bring-up debug probes (`dbg_*` ports, the ILA with

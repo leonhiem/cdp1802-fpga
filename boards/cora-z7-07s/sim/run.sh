@@ -50,6 +50,8 @@ SRCS=(
   "$BOARD_DIR/hdl/cs1800_top.vhd"
   "$BOARD_DIR/sim/tb_cs1800_top.vhd"
   "$BOARD_DIR/sim/tb_shared_ram.vhd"
+  "$BOARD_DIR/hdl/cs1800_prcx18_memory.vhd"
+  "$BOARD_DIR/sim/tb_prcx18_memory_map.vhd"
 )
 
 (
@@ -61,6 +63,16 @@ SRCS=(
 
   ghdl -e "${GHDL_FLAGS[@]}" tb_shared_ram
   ghdl -r "${GHDL_FLAGS[@]}" tb_shared_ram
+
+  # The memory map, over all 64K addresses: the real 32KB card (ROM
+  # 0x0000-0x1FFF, RAM 0x2000-0x7FFF, rest void) and the minimal config
+  # (one RAM IC at 0x4000). Proves the decode uses all 16 address lines:
+  # no aliasing, writes to ROM/void ignored, void reads 0xFF.
+  ghdl -e "${GHDL_FLAGS[@]}" tb_prcx18_memory_map
+  ghdl -r "${GHDL_FLAGS[@]}" tb_prcx18_memory_map \
+       -gg_ram_base_addr=8192 -gg_ram_words=6144
+  ghdl -r "${GHDL_FLAGS[@]}" tb_prcx18_memory_map \
+       -gg_ram_base_addr=16384 -gg_ram_words=2048
 )
 
 if diff -q "$WORK/tb_cs1800_top_tpb.txt" "$GOLDEN" >/dev/null; then
@@ -72,3 +84,4 @@ else
 fi
 
 echo "PASS: tb_shared_ram (see report above for details)"
+echo "PASS: tb_prcx18_memory_map, both configurations (see reports above)"

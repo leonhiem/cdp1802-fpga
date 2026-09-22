@@ -8,7 +8,7 @@
 --
 -- Description:
 --   Boots the real PRCX-18 v1.9.0 ROM on cs1800_prcx18_top (the Cora
---   design: ROM 0x0000-0x1FFF, RAM 0x4000-0x5FFF, CDP1854 console, LC at
+--   design: ROM 0x0000-0x1FFF, RAM 0x2000-0x7FFF, CDP1854 console, LC at
 --   50 Hz), waits for the "_08> " prompt, types DMP<CR> and drains the
 --   TX FIFO slowly (one byte per 1000 clocks, like the devmem bridge on
 --   the board), so TX back-pressure (THRE) gets exercised too.
@@ -150,7 +150,8 @@ BEGIN
   END PROCESS;
 
   u_dut : ENTITY work.cs1800_prcx18_top
-  GENERIC MAP ( g_lc_half_period => 40000, g_ram_words => 2048 )
+  GENERIC MAP ( g_lc_half_period => 40000,
+                g_ram_base_addr => 16#2000#, g_ram_words => 6144 )
   PORT MAP (
     CLOCK      => clk,
     ctrl_in    => ctrl_in,

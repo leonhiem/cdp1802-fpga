@@ -58,7 +58,8 @@ USE IEEE.NUMERIC_STD.ALL;
 ENTITY cs1800_prcx18_top IS
   GENERIC (
     g_lc_half_period : POSITIVE := 1_000_000; -- CLOCK cycles per LC half-period
-    g_ram_words      : INTEGER := 2048 -- 32-bit words of RAM above the 8KB ROM (2048 = 8KB, the real minimum config -- MUST be a power of two, see cs1800_prcx18_memory.vhd's header for why)
+    g_ram_base_addr  : INTEGER := 16#2000#; -- CPU address where RAM starts
+    g_ram_words      : INTEGER := 6144 -- 32-bit words of RAM (6144 = 24KB: the real 32KB card is 4 ICs of 8KB and the first one is the ROM -- see cs1800_prcx18_memory.vhd's header)
   );
   PORT (
     CLOCK      : IN  STD_LOGIC;
@@ -321,6 +322,7 @@ BEGIN
 
   u_ram : ENTITY work.cs1800_prcx18_memory
   GENERIC MAP (
+    g_ram_base_addr => g_ram_base_addr,
     g_ram_words => g_ram_words
   )
   PORT MAP (

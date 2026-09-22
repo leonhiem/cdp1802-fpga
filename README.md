@@ -132,7 +132,7 @@ cores, both `devmem`-accessible from Linux on the board:
 | Address | What |
 |---|---|
 | `0x4120_0000` | control (write) / status (read) byte -- see table below |
-| `0x4000_0000` | the CDP1802's RAM (4KB), for loading a program |
+| `0x4000_0000` | the CDP1802's memory, for loading a program (see `boards/cora-z7-07s/README.md` for the PRCX-18 design's real ROM/RAM map) |
 
 Control byte, at `0x4120_0000` (defaults to `0x01` on power-up, holding
 the CPU in reset so its RAM's write access starts out belonging to

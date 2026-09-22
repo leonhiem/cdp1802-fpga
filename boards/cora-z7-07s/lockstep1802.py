@@ -27,6 +27,8 @@
 #            interrupts are all checked, not taken from the trace.
 #   --coverage : also fail unless every opcode except 0x68 was executed and
 #            every conditional branch/skip went both ways.
+#   --ram <lo>:<hi> : the RAM window in the default (non-flat) map, hex
+#            (default 2000:7FFF, the real 32KB memory card)
 #   --strict-address : also fail when the address on an S1 cycle without a
 #            memory access differs from the datasheet's Table 2 (otherwise
 #            only counted in a note: no strobe, so nothing can act on it).
@@ -38,7 +40,10 @@
 import sys
 
 ROM_END = 0x2000
-RAM_LO, RAM_HI = 0x4000, 0x5FFF
+# The real 32KB memory card: 4 ICs of 8KB, the first of which is the ROM.
+# Override with --ram <lo>:<hi> for another configuration (the minimal one
+# is a single RAM IC at 0x4000: --ram 4000:5fff).
+RAM_LO, RAM_HI = 0x2000, 0x7FFF
 
 
 def hx(t):
@@ -151,7 +156,15 @@ def main():
     flat = '--flat' in args
     want_coverage = '--coverage' in args
     strict_address = '--strict-address' in args
+    ram_opt = None
+    if '--ram' in args:
+        k = args.index('--ram')
+        ram_opt = args[k + 1]
+        del args[k:k + 2]
     args = [a for a in args if a not in ('--flat', '--coverage', '--strict-address')]
+    if ram_opt is not None:
+        lo, hi = ram_opt.split(':')
+        RAM_LO, RAM_HI = int(lo, 16), int(hi, 16)
     idle_addr_diff = {}                # opcode -> count, see Table 2 check
     rom = open(args[0], 'rb').read()
     cyc = group_cycles(load_events(args[1]))

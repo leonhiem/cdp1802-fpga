@@ -74,7 +74,10 @@
 --   shared_ram.vhd's header), used to load the real ROM image at
 --   runtime -- never embedded here. Port B can write anywhere,
 --   including the ROM region -- that's how the real ROM image actually
---   gets loaded. Port B's read stays combinational/unregistered
+--   gets loaded. It is a FLAT window over the whole array: byte offset
+--   0 is ROM 0x0000, and the CPU's RAM follows at offset 0x2000 (i.e.
+--   AXI offset = 0x2000 + cpu_address - RAM base), which also lets
+--   Linux read the CPU's RAM back for debugging. Port B's read stays combinational/unregistered
 --   (unchanged) -- axi_bram_ctrl already tolerates that today, and
 --   this fix only ever targeted Port A's real-time hazard.
 --
@@ -136,7 +139,21 @@
 --   write-then-readback RAM-sizing probe at the correct, real boundary
 --   instead of always succeeding.
 --
---   UPDATE, same day: RAM does NOT start right after ROM. An
+--   UPDATE 2026-09-22 (TODO 3): the real memory card carries FOUR 8KB
+--   ICs, and the ROM is the first of them, so a fully populated card is
+--   ROM 0x0000-0x1FFF and RAM 0x2000-0x7FFF (24KB) -- that is the
+--   "32KB" configuration (the card's total). A second card would cover
+--   0x8000-0xFFFF; with none installed, that whole upper half is
+--   genuinely void. PRCX-18 itself starts its RAM sweep at 0x4000
+--   (hard-coded, see doc/PRCX18_ANALYSIS.md), so it finds and uses
+--   0x4000-0x7FFF; the RAM at 0x2000-0x3FFF is present but never
+--   touched by this OS, because that slot is the second EPROM's
+--   (macro assembler) address range on a real rack. The note below is
+--   what that looked like from the MINIMAL config (one ROM IC + one
+--   RAM IC), where the single RAM IC has to sit at 0x4000 to be found
+--   at all.
+--
+--   UPDATE, 2026-09-18: RAM does NOT start right after ROM. An
 --   instrumented GHDL simulation logging every real memory write
 --   during boot (real ROM, full 64KB-addressable RAM) showed the
 --   RAM-sizing sweep's write-then-readback probing never touches
@@ -160,7 +177,8 @@ USE work.test_program_pkg.ALL;
 
 ENTITY cs1800_prcx18_memory IS
   GENERIC (
-    g_ram_words : INTEGER := 2048 -- 32-bit words of RAM above the 8KB ROM (2048 = 8KB, matching the real minimum config the user pulled from the rack -- MUST be a power of two, see this file's header's "bug #1" note; cs1800_prcx18_top.vhd always passes its own generic through anyway)
+    g_ram_base_addr : INTEGER := 16#2000#; -- CPU address where RAM starts (the real map, see header)
+    g_ram_words : INTEGER := 6144 -- 32-bit words of RAM (6144 = 24KB: the real 32KB memory card is 4 ICs of 8KB, the first of which is the ROM -- see this file's header. Any size at any base works; no power-of-two or alignment requirement)
   );
   PORT (
     clk     : IN STD_LOGIC;
@@ -192,14 +210,13 @@ ARCHITECTURE str OF cs1800_prcx18_memory IS
   CONSTANT c_rom_words : INTEGER := c_rom_size / 4; -- 2048
   CONSTANT c_mem_words : INTEGER := c_rom_words + g_ram_words; -- one unified array
 
-  -- g_ram_words MUST be a power of two -- see this file's header's
-  -- "bug #1" note. c_ram_addr_bits is how many low address bits (above
-  -- the byte-lane's low 2) actually index the RAM's own local offset
-  -- within its window; every bit above that is simply ignored
-  -- (aliased), the exact same zero-arithmetic bit-slice idiom
-  -- shared_ram.vhd/ram.vhd use -- no subtract, no modulo, nothing that
-  -- needs a real divider.
-  CONSTANT c_ram_addr_bits : INTEGER := integer(round(log2(real(g_ram_words))));
+  -- The RAM's local offset is (address - base) >> 2: a real subtraction,
+  -- 2026-09-22 (TODO 3, 32KB RAM). It used to be a bit-slice of the
+  -- address, which is only the same thing while the window happens to be
+  -- aligned to its own size -- true for 8KB at 0x4000, false for 32KB
+  -- (0x4000-0xBFFF), where 0x8000 would have aliased onto 0x0000. A
+  -- subtract of a constant is not a divider (see "bug #1"): it is the
+  -- same adder the index mux already carried.
 
   -- Real chip-select range for RAM. NOT right after ROM: confirmed by
   -- the user directly against real hardware (2026-09-18) -- 0x2000-
@@ -215,15 +232,13 @@ ARCHITECTURE str OF cs1800_prcx18_memory IS
   -- working on real hardware with exactly this map (ROM 0x0000-0x1FFF,
   -- RAM 0x4000-0x5FFF). c_ram_base_addr is its own named constant
   -- (not derived from c_rom_size) for exactly this reason -- the two
-  -- regions are not adjacent. 0x4000 = 2^14 is itself a clean 16KB-
-  -- aligned address, so the existing bit-slice RAM index
-  -- (a_address(c_ram_addr_bits+1 downto 2), unchanged below) still
-  -- computes the correct in-window offset with no extra subtraction --
-  -- but only as long as g_ram_words*4 <= 16384 (g_ram_words <= 4096).
-  -- A future g_ram_words larger than that would need an explicit
-  -- "a_address - c_ram_base" subtraction added to the index
-  -- computation instead of relying on this alignment coincidence.
-  CONSTANT c_ram_base_addr : INTEGER := 16#4000#;
+  -- regions are not adjacent. The in-window offset is computed with a
+  -- real "address - base" subtraction (cpu_word_index below), so the
+  -- window may be any size at any base: the old bit-slice index relied
+  -- on 0x4000 happening to be aligned to the window's own size, which
+  -- stops being true at 32KB (0x4000-0xBFFF), where 0x8000 would alias
+  -- onto 0x0000.
+  CONSTANT c_ram_base_addr : INTEGER := g_ram_base_addr;
   CONSTANT c_ram_base  : unsigned(15 DOWNTO 0) := to_unsigned(c_ram_base_addr, 16);
   CONSTANT c_ram_top   : unsigned(15 DOWNTO 0) := to_unsigned(c_ram_base_addr + g_ram_words*4 - 1, 16);
 
@@ -252,6 +267,21 @@ ARCHITECTURE str OF cs1800_prcx18_memory IS
     RETURN result;
   END FUNCTION;
 
+  -- One place that turns a CPU address into a word index in the unified
+  -- array: ROM at 0 .. c_rom_words-1, RAM right after it. Anything
+  -- unmapped returns 0 -- never a wrapped or aliased index; the access
+  -- itself is suppressed separately (writes) or overridden (reads).
+  FUNCTION cpu_word_index(addr : unsigned(15 DOWNTO 0)) RETURN NATURAL IS
+  BEGIN
+    IF addr < to_unsigned(c_rom_size, 16) THEN
+      RETURN to_integer(addr(12 DOWNTO 2));
+    ELSIF addr >= c_ram_base AND addr <= c_ram_top THEN
+      RETURN c_rom_words + to_integer(shift_right(addr - c_ram_base, 2));
+    ELSE
+      RETURN 0; -- unmapped: index unused, see a_unmapped_reg / eff_we
+    END IF;
+  END FUNCTION;
+
   -- ONE array covering both regions -- see this file's header's "bug
   -- #2" note for why this replaced two separate (rom, ram) arrays.
   -- Indices 0 TO c_rom_words-1 are the (write-protected) ROM region;
@@ -265,13 +295,12 @@ ARCHITECTURE str OF cs1800_prcx18_memory IS
   -- into the one mem array -- never two independently-read arrays
   -- combined by a data-level mux (that was bug #2).
   SIGNAL eff_addr    : STD_LOGIC_VECTOR(15 DOWNTO 0);
-  SIGNAL eff_is_rom  : STD_LOGIC;
   SIGNAL eff_data    : STD_LOGIC_VECTOR(31 DOWNTO 0);
   SIGNAL eff_we      : STD_LOGIC_VECTOR(3 DOWNTO 0);
   SIGNAL eff_en      : STD_LOGIC;
-  SIGNAL eff_rom_idx : NATURAL RANGE 0 TO c_rom_words - 1;
-  SIGNAL eff_ram_idx : NATURAL RANGE 0 TO g_ram_words - 1;
   SIGNAL eff_idx     : NATURAL RANGE 0 TO c_mem_words - 1;
+  SIGNAL b_word_idx  : NATURAL RANGE 0 TO 16383; -- flat Port B word index
+  SIGNAL b_valid     : STD_LOGIC;                -- ... and whether it is backed
 
   SIGNAL a_is_rom       : STD_LOGIC;
   SIGNAL a_is_ram_valid : STD_LOGIC;
@@ -287,20 +316,26 @@ ARCHITECTURE str OF cs1800_prcx18_memory IS
 
 BEGIN
 
-  -- Real full 16-bit chip-select decode -- see this file's header.
-  -- Port B (our own runtime ROM-loading path from Linux, not a real
-  -- chip) is left unrestricted -- eff_is_rom/eff_ram_idx below only
-  -- matter for Port B in the sense that they still correctly place a
-  -- byte within ROM vs RAM; Port B never needs the "genuinely
-  -- unmapped" concept since it doesn't model a real bus device.
+  -- Real full 16-bit chip-select decode -- see this file's header. Port A
+  -- models the real bus: ROM, RAM, or genuinely unmapped. Port B is our
+  -- own runtime loading path from Linux, not a real chip, so it has no
+  -- "unmapped" concept -- but it is not aliased either: it is a flat
+  -- window over the array and stops at its end (b_valid).
+  -- Port B is a flat window over the whole array (ROM first, then RAM),
+  -- 2026-09-22: byte address 0 .. (c_mem_words*4 - 1), so Linux reaches
+  -- the ROM image at offset 0 (unchanged: that is where the loader
+  -- writes it) and the CPU's RAM right behind it, at offset
+  -- c_rom_size + (cpu_address - RAM base). It used to select RAM by
+  -- b_addr(15:13) and index it with the same bit-slice as Port A, which
+  -- aliased just as Port A did. Anything past the end of the array is
+  -- not mapped at all (b_valid), never wrapped onto real storage.
+  b_word_idx <= to_integer(unsigned(b_addr(15 DOWNTO 2)));
+  b_valid    <= '1' WHEN b_word_idx < c_mem_words ELSE '0';
+
   eff_addr    <= b_addr WHEN sel_ext = '1' ELSE a_address;
-  eff_is_rom  <= '1' WHEN eff_addr(15 DOWNTO 13) = "000" ELSE '0';
-  eff_rom_idx <= to_integer(unsigned(eff_addr(12 DOWNTO 2)));
-  eff_ram_idx <= to_integer(unsigned(eff_addr(c_ram_addr_bits + 1 DOWNTO 2)));
-  -- Single index mux -- a small constant-offset add over an 8-bit
-  -- range (g_ram_words), nothing like bug #1's runtime divider, and
-  -- feeding only ONE array read downstream, never two.
-  eff_idx     <= eff_rom_idx WHEN eff_is_rom = '1' ELSE c_rom_words + eff_ram_idx;
+  eff_idx     <= b_word_idx WHEN (sel_ext = '1' AND b_valid = '1') ELSE
+                 0          WHEN sel_ext = '1' ELSE
+                 cpu_word_index(unsigned(a_address));
 
   eff_data <= b_din WHEN sel_ext = '1' ELSE a_data_in & a_data_in & a_data_in & a_data_in;
 
@@ -309,10 +344,11 @@ BEGIN
   -- unmapped (no real chip there to write to either). Port B may write
   -- either region (that's how the ROM image gets loaded) -- it doesn't
   -- model a real bus device, see above.
-  a_is_rom       <= '1' WHEN a_address(15 DOWNTO 13) = "000" ELSE '0';
+  a_is_rom       <= '1' WHEN unsigned(a_address) < to_unsigned(c_rom_size, 16) ELSE '0';
   a_is_ram_valid <= '1' WHEN (unsigned(a_address) >= c_ram_base AND unsigned(a_address) <= c_ram_top) ELSE '0';
 
-  eff_we <= b_we WHEN sel_ext = '1' ELSE
+  eff_we <= b_we   WHEN (sel_ext = '1' AND b_valid = '1') ELSE
+            "0000" WHEN sel_ext = '1' ELSE -- past the end of the array
             "0000" WHEN a_is_ram_valid = '0' ELSE
             "0001" WHEN (a_nCS = '0' AND a_nWE = '0' AND a_address(1 DOWNTO 0) = "00") ELSE
             "0010" WHEN (a_nCS = '0' AND a_nWE = '0' AND a_address(1 DOWNTO 0) = "01") ELSE
@@ -360,19 +396,11 @@ BEGIN
   -- entirely separately and overrides a_data_out below regardless of
   -- what a_word_reg holds in that case.
   PROCESS (clk) IS
-    VARIABLE rom_idx : NATURAL RANGE 0 TO c_rom_words - 1;
-    VARIABLE ram_idx : NATURAL RANGE 0 TO g_ram_words - 1;
-    VARIABLE idx     : NATURAL RANGE 0 TO c_mem_words - 1;
+    VARIABLE idx : NATURAL RANGE 0 TO c_mem_words - 1;
   BEGIN
     IF rising_edge(clk) THEN
       IF (a_nCS = '0' AND a_nOE = '0') THEN
-        rom_idx := to_integer(unsigned(a_address(12 DOWNTO 2)));
-        ram_idx := to_integer(unsigned(a_address(c_ram_addr_bits + 1 DOWNTO 2)));
-        IF a_is_rom = '1' THEN
-          idx := rom_idx;
-        ELSE
-          idx := c_rom_words + ram_idx;
-        END IF;
+        idx := cpu_word_index(unsigned(a_address));
         a_word_reg <= mem(idx);
         a_lane_reg <= a_address(1 DOWNTO 0);
         a_sel_reg  <= '1';
@@ -412,10 +440,10 @@ BEGIN
   BEGIN
     IF rising_edge(clk) THEN
       IF b_en = '1' THEN
-        IF b_addr(15 DOWNTO 13) /= "000" THEN
-          b_dout_reg <= mem(c_rom_words + to_integer(unsigned(b_addr(c_ram_addr_bits + 1 DOWNTO 2))));
+        IF b_valid = '1' THEN          -- one flat index, one array read
+          b_dout_reg <= mem(b_word_idx);
         ELSE
-          b_dout_reg <= mem(to_integer(unsigned(b_addr(12 DOWNTO 2))));
+          b_dout_reg <= (OTHERS => '0'); -- past the end of the array
         END IF;
       END IF;
     END IF;

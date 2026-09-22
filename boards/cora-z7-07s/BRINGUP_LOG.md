@@ -2471,3 +2471,38 @@ pointer) for SEP calls, which had let a DMA burst overwrite the program.
 Verified: DMA edge cases, ISA coverage, exhaustive ALU, 1,000 random
 programs (now with DMA), PRCX-18 lockstep, golden references unchanged,
 and on the Cora.
+
+## 2026-09-22: the real 32KB memory card (TODO 3)
+
+The user's correction: a 32KB memory card is four 8KB ICs and the *first*
+one is the ROM, so a fully populated card is ROM 0x0000-0x1FFF and RAM
+0x2000-0x7FFF (24KB); a second card would cover 0x8000-0xFFFF and is
+absent, so that half is void. The Cora now runs exactly that
+(`g_ram_base_addr = 0x2000`, `g_ram_words = 6144`).
+
+The decode always used all 16 address lines, but the RAM *index* was a
+bit-slice of the address, which equals "address - base" only while the
+window is aligned to its own size -- true for 8KB at 0x4000, false for
+24KB at 0x2000. `cs1800_prcx18_memory.vhd` now subtracts, so any size at
+any base works, and Port B became a flat window over the whole array
+(ROM at offset 0, RAM behind it) instead of selecting RAM by address
+bits and indexing it with the same slice. Since RAM here starts right
+after ROM, the AXI offset equals the CPU address for the whole 32KB,
+which makes the CPU's RAM readable from Linux for debugging.
+
+New `sim/tb_prcx18_memory_map.vhd` (wired into `sim/run.sh`) walks all
+65,536 addresses in both configurations: every RAM address keeps its own
+address-derived byte (an alias would overwrite a neighbour and be named),
+ROM is unchanged against a snapshot, void reads 0xFF. Card: 24,576 RAM +
+8,192 ROM + 32,768 void. Mutation check: with the old bit-slice index the
+simulation stops at once on an out-of-range index -- in synthesis that
+same index would have aliased silently.
+
+Verified: PRCX-18 lockstep on the new map (295,626 instructions, 0
+mismatches) finds RAM 0x4000-0x7FFF and stores `40 00` / `7F FF` at
+0x7BFC/0x7BFE (it starts its sweep at 0x4000, so the RAM at
+0x2000-0x3FFF is present but unused -- that slot is the second EPROM's
+on a real rack). Build: 34/50 Block RAM tiles (mostly the debug ILA).
+On the Cora: boot, `<CR>`, full `DMP`, and reading the bounds back over
+AXI (`devmem 0x40007BFC`) gives `0xFF7F0040` = `40 00 7F FF`, the same
+as simulation.

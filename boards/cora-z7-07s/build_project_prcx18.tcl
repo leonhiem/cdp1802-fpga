@@ -157,7 +157,8 @@ set_property CONFIG.g_lc_half_period {40000} $cs1800_prcx18_top_0
 # real, currently-unfixed issue -- revisit if a way to safely grow RAM
 # is found (e.g. freeing BRAM elsewhere, like the ILA's DATA_DEPTH, or
 # understanding/avoiding whatever the 32KB hang's real cause is).
-set_property CONFIG.g_ram_words {2048} $cs1800_prcx18_top_0
+set_property CONFIG.g_ram_base_addr {8192} $cs1800_prcx18_top_0
+set_property CONFIG.g_ram_words {6144} $cs1800_prcx18_top_0
 
 # --- Bit-slice/concat glue for axi_gpio_1's two 9-bit channels: get_bd_pins'
 # own [n:m] bit-range syntax collides with Tcl's own bracket parsing when
@@ -321,7 +322,7 @@ assign_bd_address -offset 0x41210000 -range 0x00001000 \
 # 16KB range, matching the real minimal 8KB ROM + 8KB RAM config (see
 # g_ram_words note above -- stepped back from the 64KB/32KB attempts
 # after the 32KB size hit a real-hardware-only hang).
-assign_bd_address -offset 0x40000000 -range 0x00004000 \
+assign_bd_address -offset 0x40000000 -range 0x00008000 \
   -target_address_space [get_bd_addr_spaces processing_system7_0/Data] \
   [get_bd_addr_segs axi_bram_ctrl_0/S_AXI/Mem0] -force
 
