@@ -158,6 +158,139 @@ devmem 0x41200008                 # read status back -- bit 0 (Q) should be 1
 Programs are loaded 32 bits (4 bytes) at a time, little-endian: the byte
 at the lowest address goes in bits 7:0 of the word.
 
+### 5. Run the real PRCX-18 OS (the CS1800 design)
+
+Step 4's design is the simple one (a CPU and a 4KB RAM you load a program
+into). The CS1800 design is the real thing: the CDP1802 with the real
+memory card's ROM/RAM map and a CDP1854 console, running the real
+**PRCX-18 v1.9.0** operating system from your own EPROM dump. The ROM
+image is not in this repo; point the loader at your own file.
+
+```
+source <Vivado install>/2024.1/settings64.sh
+vivado -mode batch -source boards/cora-z7-07s/build_project_prcx18.tcl   # ~10 min
+vivado -mode batch -source boards/cora-z7-07s/program_prcx18.tcl
+python3 boards/cora-z7-07s/gen_load_prcx18_rom.py /path/to/prcx18.bin > /tmp/load.sh
+scp /tmp/load.sh boards/cora-z7-07s/interactive_console.sh root@<board>:/tmp/
+ssh root@<board> 'sh /tmp/load.sh'        # holds reset, loads the ROM, starts the CPU
+```
+
+(The board's SSH server may need `-o HostKeyAlgorithms=+ssh-rsa -o
+PubkeyAcceptedAlgorithms=+ssh-rsa` with current OpenSSH. The ROM lives in
+Block RAM loaded at runtime, not in the bitstream, so repeat `load.sh`
+after every reprogram or power cycle; the board runs from a ramdisk, so
+`/tmp` is empty again after a power cycle.)
+
+#### What the CDP1802 sees
+
+The real CS1800 memory card carries four 8KB ICs and the first one is the
+ROM, so a fully populated card ("32KB") is:
+
+| CPU address | What |
+|---|---|
+| `0x0000`-`0x1FFF` | ROM, 8KB -- the real 2764 EPROM image (`load.sh` writes it) |
+| `0x2000`-`0x7FFF` | RAM, 24KB |
+| `0x8000`-`0xFFFF` | void: no second card, so reads return `0xFF` and writes are ignored |
+
+PRCX-18 starts its own RAM sweep at `0x4000` (hard-coded), so it finds and
+uses `0x4000`-`0x7FFF` and leaves `0x2000`-`0x3FFF` alone -- on a real rack
+that slot belongs to the second EPROM (macro assembler). The decode uses
+all 16 address lines: nothing aliases, which
+`boards/cora-z7-07s/sim/tb_prcx18_memory_map.vhd` proves over all 65,536
+addresses. Change the map with the design's generics (`g_ram_base_addr`,
+`g_ram_words`); any size at any base works.
+
+#### What Linux sees (devmem)
+
+| AXI address | What |
+|---|---|
+| `0x4000_0000 + n` | the CDP1802's memory, byte `n` -- **the same address the CPU uses**: `0x4000_0000` is the CPU's `0x0000` (ROM), `0x4000_2000` is the CPU's `0x2000` (RAM), up to `0x4000_7FFF` |
+| `0x4120_0000` | control byte (write) -- table below |
+| `0x4120_0008` | status byte (read): bit 0 = `Q`, bit 1 = `LC` |
+| `0x4121_0000` | console keyboard input: bits 7:0 = the byte, bit 8 = "a key is available" |
+| `0x4121_0008` | console output FIFO: bits 7:0 = the next byte, bit 8 = "a byte is waiting" |
+
+Control byte at `0x4120_0000`:
+
+| bit | meaning |
+|---|---|
+| 0 | `reset` (also gives the AXI side write access to the memory, for loading) |
+| 1 | `halt` |
+| 2 | `single` (no-op today) |
+| 3 | `run` |
+| 4 | `nEF1` |
+| 5 | `LC` run: `1` = the 50 Hz clock interrupt runs, `0` = frozen (for debugging) |
+| 6 | `nEF3` |
+| 7 | pop one byte from the console output FIFO (write 1 then 0) |
+
+So `0x68` = run with LC going (what `load.sh` leaves behind), `0x48` = run
+with LC frozen, `0x01` = hold the CPU in reset.
+
+Memory is read and written as 32-bit words, little-endian: the byte at the
+lowest address is bits 7:0. Some things you can do from a shell on the
+board while PRCX-18 runs:
+
+```
+# What did PRCX-18 decide its RAM is? It stores the bounds near the top of
+# RAM (0x7BFC = bottom, 0x7BFE = top):
+busybox devmem 0x40007BFC 32          # -> 0xFF7F0040  = 40 00 7F FF
+#                                       = bottom 0x4000, top 0x7FFF
+
+# Look at the CPU's RAM (here: the first word of the RAM PRCX-18 uses)
+busybox devmem 0x40004000 32
+
+# Check a ROM byte you loaded (CPU address 0x0000 = the first instruction)
+busybox devmem 0x40000000 32          # -> 0xBF900071 = 71 00 90 BF
+
+# Stop and restart the CPU without reloading the ROM
+busybox devmem 0x41200000 32 0x01     # reset
+busybox devmem 0x41200000 32 0x68     # run again (LC on)
+```
+
+Writing memory while the CPU runs works too, but the CPU wins any
+same-cycle conflict; hold reset (`0x01`) first if you want a quiet
+machine. Note that loading the ROM is exactly this: `load.sh` holds
+reset, writes `0x4000_0000` onward, then releases.
+
+#### A console session
+
+`interactive_console.sh` turns your ssh session into a terminal on the
+CDP1854 console: it puts the tty in raw mode, drains the output FIFO, and
+sends every keystroke to the CPU. Run it **on the board**:
+
+```
+root@Cora-Z7-07S:/tmp# ./interactive_console.sh
+
+Dutch 1800 MicroProUsers
+CS1800/PRCX-18    V1.9.0
+
+-SYS-Starting Console Task-
+_08> 
+_08> DMP
+ADDR   0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F       ASCII
+4000  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+4010  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+...
+40F0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+
+_08> 
+```
+
+- `_08>` is PRCX-18's prompt; `08` is the console task's ID. Pressing
+  Enter just gives you a new prompt.
+- **Exit with Ctrl-]**. Ctrl-C is passed through to PRCX-18 as a normal
+  character (a real terminal program needs its own escape key for the
+  same reason).
+- `./interactive_console.sh 0x48` runs with the 50 Hz LC interrupt frozen,
+  which is sometimes useful when debugging.
+- Output arrives at roughly 35 characters per second, because every byte
+  costs a few `devmem` round trips. A long `DMP` therefore draws slowly;
+  nothing is lost (the CPU is held back by the UART's own "transmitter
+  busy" flag, exactly as a real serial line would).
+- Other commands to try: `TSKL` (task list, where you can watch the
+  console task's ID), and anything your own rack accepts -- an unknown
+  command answers `-MRCI-NOT FOUND-`.
+
 ## Testing
 
 Three layers, from seconds to real silicon. Why each exists and what it
@@ -289,32 +422,13 @@ yourself: `python3 boards/cora-z7-07s/lockstep1802.py <rom.bin> <cyc.log> [max_e
 
 ### Layer 3: on the Cora Z7-07S
 
-Use the PRCX-18 design (`build_project_prcx18.tcl`), not the older
-`build_project.tcl` shown in "Getting started". From the host:
+Build, program, load the ROM and open the console exactly as in
+"5. Run the real PRCX-18 OS" above. Before reprogramming, make sure no
+old `devmem` loop or console is still running on the board
+(`ps | grep -E "devmem|interactive"`): reprogramming underneath one can
+hang the board.
 
-```
-source <Vivado install>/2024.1/settings64.sh
-vivado -mode batch -source boards/cora-z7-07s/build_project_prcx18.tcl   # ~10 min
-# on the board first: make sure no old devmem loops are running,
-#   ps | grep -E "devmem|interactive"   -- reprogramming under one can hang the board
-vivado -mode batch -source boards/cora-z7-07s/program_prcx18.tcl
-python3 boards/cora-z7-07s/gen_load_prcx18_rom.py /path/to/prcx18.bin > /tmp/load.sh
-scp /tmp/load.sh boards/cora-z7-07s/interactive_console.sh root@<board>:/tmp/
-```
-
-(The board's SSH server needs `-o HostKeyAlgorithms=+ssh-rsa -o
-PubkeyAcceptedAlgorithms=+ssh-rsa` with current OpenSSH.) Then on the board:
-
-```
-sh /tmp/load.sh                       # holds reset, loads the ROM, starts the CPU with LC running
-sh /tmp/interactive_console.sh        # live console; exit with Ctrl-]  (0x48 as argument = LC off)
-```
-
-The ROM lives in Block RAM loaded at runtime, not in the bitstream, so
-repeat `load.sh` after every reprogram or power cycle. The board runs
-from a ramdisk, so `/tmp` is empty after a power cycle.
-
-Expected session (compare with the real CS1800):
+Expected session (compare with your real CS1800):
 
 ```
 Dutch 1800 MicroProUsers
@@ -322,15 +436,21 @@ CS1800/PRCX-18    V1.9.0
 
 -SYS-Starting Console Task-
 _08>                      <CR> gives a new _08> prompt
-_08> TSKL                 task list: System 00, Console 08, TSKL 10
-_08> DMP                  16 lines, 4000-40F0, then _08>
+_08> TSKL                 task list: the console task is ID 08
+_08> DMP                  16 lines from 0x4000, then _08>
 ```
 
-Things to check: exactly one "Starting Console Task", the prompt stays
-`_08>` (no `_10>`, `_18>` or `^@` appearing by itself, even after
-minutes with LC on), and long output such as `DMP` completes with a
-closing prompt. Output arrives at ~35 characters/s because of the devmem
-bridge; that is expected.
+What to check:
+- exactly one "Starting Console Task", and the prompt stays `_08>` (no
+  `_10>`, `_18>`, and no `^@` appearing by itself, even after minutes
+  with LC running);
+- long output such as `DMP` completes and ends with a prompt;
+- PRCX-18's detected RAM matches the memory map:
+  `busybox devmem 0x40007BFC 32` gives `0xFF7F0040` (bottom `0x4000`,
+  top `0x7FFF`).
+
+Output arrives at ~35 characters/s through the devmem bridge; that is
+expected, not a fault.
 
 ## Repository layout
 
