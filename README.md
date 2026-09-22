@@ -273,11 +273,22 @@ ADDR   0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F       ASCII
 ...
 40F0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
 
+_08> TSKL
+ID    FLAGS    PRI  STACK    PID CMD
+00  ........R  04  7F  7FDF  00  System
+08  ...W.....  01  77  77DD  00  Console 
+10  ........R  01  74  74DB  08  TSKL
+
 _08> 
 ```
 
-- `_08>` is PRCX-18's prompt; `08` is the console task's ID. Pressing
-  Enter just gives you a new prompt.
+- `_08>` is PRCX-18's prompt; `08` is the console task's ID, and `TSKL`
+  runs as its child (PID 08). Pressing Enter just gives you a new prompt.
+- `TSKL` is also a quick check that the memory map took effect: PRCX-18
+  places its task stacks relative to the top of the RAM it found, so with
+  this 24KB card they sit at `7F`/`77`/`74` (top `0x7FFF`). On a machine
+  with a single 8KB RAM IC at `0x4000` (top `0x5FFF`) the same three tasks
+  report `5F`/`57`/`54` -- exactly 0x2000 lower.
 - **Exit with Ctrl-]**. Ctrl-C is passed through to PRCX-18 as a normal
   character (a real terminal program needs its own escape key for the
   same reason).

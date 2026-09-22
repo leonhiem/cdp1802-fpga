@@ -2506,3 +2506,10 @@ on a real rack). Build: 34/50 Block RAM tiles (mostly the debug ILA).
 On the Cora: boot, `<CR>`, full `DMP`, and reading the bounds back over
 AXI (`devmem 0x40007BFC`) gives `0xFF7F0040` = `40 00 7F FF`, the same
 as simulation.
+
+**TSKL cross-check (2026-09-22).** On the Cora with the 24KB card,
+PRCX-18's task list reports stacks `7F`/`77`/`74` (System/Console/TSKL,
+`7FDF`/`77DD`/`74DB`). The user's real CS1800 with a single 8KB RAM IC
+(top `0x5FFF`) reports `5F`/`57`/`54` for the same three tasks: exactly
+0x2000 lower, since the OS lays its stacks out relative to the top of the
+RAM it detected. End-to-end confirmation of the new memory map.
