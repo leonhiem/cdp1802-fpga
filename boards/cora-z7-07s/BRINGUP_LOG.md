@@ -2434,3 +2434,40 @@ Found on the way:
 Verified after the fixes: random 1,000 seeds, ISA coverage, exhaustive
 ALU (22/22), PRCX-18 lockstep (205,538 instructions), golden references
 unchanged, and on the Cora: boot, `<CR>` x3, full `DMP`, closing prompt.
+
+## 2026-09-22: interrupt and DMA edge cases (TODO 2.4) -- five more core bugs
+
+DMA had never been exercised. New test `sim/ghdl/isa/run_dma.sh`
+(`gen_dma_prog.py`): DMA in/out, single and burst, around long branches,
+long skips and NOP, during IDL, together with INT, and an interrupt right
+after every instruction shape. The testbench models a DMA controller (io
+latch 7: in/out, burst, delayed start; the DMA-in byte from io latch 4),
+and `lockstep1802.py` models every S2 cycle wherever it appears.
+
+The datasheet's Figure 25 (state transition diagram) and its priority
+list -- FORCE S0/S1, then DMA IN, DMA OUT, INT -- settled what is right.
+Five core bugs (details: `doc/CDP1802_CORE_REVIEW.md`, bugs 6-10):
+
+- **severe:** a DMA during a long branch/skip/NOP was served *between*
+  the two execute cycles and the second cycle was then dropped, leaving
+  R(P) inside the instruction -- the CPU executed the operand byte and
+  ran away. FORCE S1 now has priority over DMA.
+- INP's write strobe ran half a clock past the end of its cycle, so a
+  real memory (which latches on the trailing edge) stored the *next*
+  cycle's data. The strobe now ends at clk 7.
+- an interrupt was not taken at the end of a multi-cycle instruction
+  (the `extraS1` condition), delaying it by one instruction.
+- a DMA served during an `IDL` ended the idle; it now returns to idling.
+- the S2 cycle took its direction from the live request lines, so a
+  controller that drops its request when the cycle is granted got a DMA
+  cycle with no strobes. The direction is latched at the cycle start.
+
+Testbench/generator issues found alongside (not core bugs): the W log
+line now precedes the C line of the cycle it belongs to and a write is
+counted only where its pulse starts; the DMA-in byte is supplied for any
+granted DMA cycle; and the random generator never uses R0 (the DMA
+pointer) for SEP calls, which had let a DMA burst overwrite the program.
+
+Verified: DMA edge cases, ISA coverage, exhaustive ALU, 1,000 random
+programs (now with DMA), PRCX-18 lockstep, golden references unchanged,
+and on the Cora.

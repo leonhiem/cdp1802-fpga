@@ -19,7 +19,8 @@
 --
 --   Output files (in the working directory):
 --     cyc.log   : "C <sc> <addr> <data> <R|->" at every TPB (one line per
---                 machine cycle) and "W <addr> <data>" per nMWR pulse --
+--                 machine cycle), each preceded by "W <addr> <data>" when
+--                 that cycle wrote memory --
 --                 the input for boards/cora-z7-07s/lockstep1802.py
 --     drain.log : every byte drained from the TX FIFO (hex, one per line)
 --
@@ -180,6 +181,7 @@ BEGIN
     VARIABLE rd : BOOLEAN := FALSE;
     VARIABLE wa : STD_LOGIC_VECTOR(15 DOWNTO 0) := (OTHERS => '0');
     VARIABLE wd : STD_LOGIC_VECTOR(7 DOWNTO 0) := (OTHERS => '0');
+    VARIABLE wr : BOOLEAN := FALSE;
     VARIABLE prev_tpb, prev_nmwr : STD_LOGIC := '0';
   BEGIN
     WAIT UNTIL running;
@@ -187,15 +189,24 @@ BEGIN
       WAIT UNTIL rising_edge(clk);
       EXIT WHEN tb_end = '1';
       IF nmrd = '0' THEN rd := TRUE; END IF;
-      IF nmwr = '0' THEN wa := a_full; wd := data; END IF;
-      IF nmwr = '1' AND prev_nmwr = '0' THEN
-        WRITE(l, STRING'("W "));
-        WRITE(l, to_hstring(wa));
-        WRITE(l, STRING'(" "));
-        WRITE(l, to_hstring(wd));
-        WRITELINE(f_out, l);
+      -- A write belongs to the cycle in which its pulse STARTED: the tail
+      -- of a pulse can reach into the next cycle, which must not count.
+      IF nmwr = '0' AND (prev_nmwr = '1' OR wr) THEN
+        wa := a_full; wd := data; wr := TRUE;
       END IF;
+      -- The W line is written just before the C line of the cycle the write
+      -- belongs to, so a write is never ambiguous between two cycles (a
+      -- pulse may end after its own TPB, and the next cycle can have the
+      -- same address).
       IF tpb = '1' AND prev_tpb = '0' THEN
+        IF wr THEN
+          WRITE(l, STRING'("W "));
+          WRITE(l, to_hstring(wa));
+          WRITE(l, STRING'(" "));
+          WRITE(l, to_hstring(wd));
+          WRITELINE(f_out, l);
+          wr := FALSE;
+        END IF;
         WRITE(l, STRING'("C "));
         WRITE(l, to_hstring(sc));
         WRITE(l, STRING'(" "));

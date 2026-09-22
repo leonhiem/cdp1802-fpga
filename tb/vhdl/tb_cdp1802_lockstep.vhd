@@ -17,12 +17,20 @@
 --     OUT n (n=1..7)  latches the bus byte into io_latch(n)
 --     INP n (n=1..7)  reads io_latch(n) back (loopback: checks N lines)
 --     EF1..EF4        = io_latch(7) bits 0..3 (1 = flag active, nEF low)
+--     DMA             controlled by io_latch(7) bits 4..7 (see below), with
+--                     the DMA-in data taken from io_latch(4)
 --     INT             controlled by io_latch(6):
 --                       bit 0 = request now,
 --                       bit 1 = request g_int_delay clocks after the
 --                               last OUT 6 (each OUT 6 restarts it),
 --                       writing 0x00 withdraws the request
---   No DMA.
+--
+--   io_latch(7): bits 0..3 = EF1..EF4, bit 4 = request DMA-in, bit 5 =
+--   request DMA-out, bit 6 = burst of 4 cycles (else 1), bit 7 = start
+--   the request g_int_delay clocks later (so it can land inside an IDL or
+--   in the middle of an instruction). The request drops once its cycles
+--   have been served, so a burst cannot starve the CPU. A DMA-in writes
+--   io_latch(4) to memory.
 --
 --   The run ends when the program writes any byte to 0xFFFF (the "done"
 --   marker), or after g_max_clocks.
@@ -100,6 +108,10 @@ ARCHITECTURE tb OF tb_cdp1802_lockstep IS
   SIGNAL nef      : STD_LOGIC_VECTOR(3 DOWNTO 0);
   SIGNAL nint     : STD_LOGIC := '1';
   SIGNAL int_restart : STD_LOGIC := '0';
+  SIGNAL dma_restart : STD_LOGIC := '0';
+  SIGNAL ndma_in  : STD_LOGIC := '1';
+  SIGNAL ndma_out : STD_LOGIC := '1';
+  SIGNAL dma_in_active : BOOLEAN;
   SIGNAL done     : BOOLEAN := FALSE;
 
 BEGIN
@@ -125,15 +137,22 @@ BEGIN
     TPB      => tpb,
     nMWR     => nmwr,
     nINT     => nint,
-    nDMA_OUT => '1',
-    nDMA_IN  => '1'
+    nDMA_OUT => ndma_out,
+    nDMA_IN  => ndma_in
   );
 
+  -- The DMA-in byte comes from io_latch(4); the CPU is writing M(R0) from
+  -- the bus, exactly as for INP.
+  -- The device drives its byte during any granted DMA cycle in which the
+  -- CPU writes (sc = S2, no memory read), whatever the request line does
+  -- meanwhile: once the CPU has started the cycle it carries it out.
+  dma_in_active <= sc = "10";
   -- INP n: N /= 0 with no memory read (the CPU is writing M(R(X)) from the bus)
   io_read  <= n /= "000" AND nmrd = '1';
   io_dout  <= io_latch(to_integer(unsigned(n))) WHEN n /= "000" ELSE (OTHERS => '0');
   mem_dout <= mem(to_integer(unsigned(a_full))) WHEN nmrd = '0' ELSE (OTHERS => '0');
   bus_data <= cpu_dout WHEN cpu_doe = '1' ELSE
+              io_latch(4) WHEN dma_in_active AND nmrd = '1' ELSE
               io_dout  WHEN io_read ELSE
               mem_dout;
 
@@ -156,12 +175,54 @@ BEGIN
   BEGIN
     IF rising_edge(clk) THEN
       int_restart <= '0';
+      dma_restart <= '0';
       IF tpb = '1' AND sc = "01" AND n /= "000" AND nmrd = '0' THEN
         io_latch(to_integer(unsigned(n))) <= bus_data;
         IF n = "110" THEN
           int_restart <= '1';   -- every OUT 6 restarts the delay
         END IF;
+        IF n = "111" THEN
+          dma_restart <= '1';   -- every OUT 7 (re)arms the DMA request
+        END IF;
       END IF;
+    END IF;
+  END PROCESS;
+
+  -- DMA requests from io_latch(7) bits 4..7, dropped after the requested
+  -- number of S2 cycles (1..4) so a burst cannot starve the CPU.
+  p_dma : PROCESS (clk)
+    VARIABLE left : NATURAL := 0;
+    VARIABLE wait_cnt : NATURAL := 0;
+    VARIABLE prev_tpb : STD_LOGIC := '0';
+  BEGIN
+    IF rising_edge(clk) THEN
+      IF dma_restart = '1' THEN
+        IF io_latch(7)(6) = '1' THEN left := 4; ELSE left := 1; END IF;
+        IF io_latch(7)(7) = '1' THEN
+          wait_cnt := g_int_delay;   -- delayed start
+        ELSE
+          wait_cnt := 0;
+        END IF;
+      ELSIF wait_cnt > 0 THEN
+        wait_cnt := wait_cnt - 1;
+      END IF;
+      -- One DMA cycle served: drop the request at its TPB, like a real
+      -- controller that releases the line once the cycle is granted (the
+      -- CPU latches the direction at the start of the cycle).
+      IF tpb = '1' AND prev_tpb = '0' AND sc = "10" AND left > 0 THEN
+        left := left - 1;
+      END IF;
+      IF left > 0 AND wait_cnt = 0 AND io_latch(7)(4) = '1' THEN
+        ndma_in <= '0';
+      ELSE
+        ndma_in <= '1';
+      END IF;
+      IF left > 0 AND wait_cnt = 0 AND io_latch(7)(5) = '1' THEN
+        ndma_out <= '0';
+      ELSE
+        ndma_out <= '1';
+      END IF;
+      prev_tpb := tpb;
     END IF;
   END PROCESS;
 
@@ -213,21 +274,31 @@ BEGIN
     VARIABLE rd : BOOLEAN := FALSE;
     VARIABLE wa : STD_LOGIC_VECTOR(15 DOWNTO 0) := (OTHERS => '0');
     VARIABLE wd : STD_LOGIC_VECTOR(7 DOWNTO 0) := (OTHERS => '0');
+    VARIABLE wr : BOOLEAN := FALSE;
     VARIABLE prev_tpb, prev_nmwr : STD_LOGIC := '0';
   BEGIN
     LOOP
       WAIT UNTIL rising_edge(clk);
       EXIT WHEN tb_end = '1';
       IF nmrd = '0' THEN rd := TRUE; END IF;
-      IF nmwr = '0' THEN wa := a_full; wd := bus_data; END IF;
-      IF nmwr = '1' AND prev_nmwr = '0' THEN
-        WRITE(l, STRING'("W "));
-        WRITE(l, to_hstring(wa));
-        WRITE(l, STRING'(" "));
-        WRITE(l, to_hstring(wd));
-        WRITELINE(f_out, l);
+      -- A write belongs to the cycle in which its pulse STARTED: the tail
+      -- of a pulse can reach into the next cycle, which must not count.
+      IF nmwr = '0' AND (prev_nmwr = '1' OR wr) THEN
+        wa := a_full; wd := bus_data; wr := TRUE;
       END IF;
+      -- The W line is written just before the C line of the cycle the write
+      -- belongs to, so a write is never ambiguous between two cycles (a
+      -- pulse may end after its own TPB, and the next cycle can have the
+      -- same address).
       IF tpb = '1' AND prev_tpb = '0' THEN
+        IF wr THEN
+          WRITE(l, STRING'("W "));
+          WRITE(l, to_hstring(wa));
+          WRITE(l, STRING'(" "));
+          WRITE(l, to_hstring(wd));
+          WRITELINE(f_out, l);
+          wr := FALSE;
+        END IF;
         WRITE(l, STRING'("C "));
         WRITE(l, to_hstring(sc));
         WRITE(l, STRING'(" "));

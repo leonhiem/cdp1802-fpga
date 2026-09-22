@@ -46,6 +46,10 @@ ENTITY control IS
     clk_cnt_out: OUT STD_LOGIC_VECTOR(2 DOWNTO 0);
     Go_Idle    : IN  STD_LOGIC;
     Do_MRD     : IN  STD_LOGIC;
+    -- The DMA direction of the S2 cycle in progress, decided once when the
+    -- cycle is entered (instr.vhd carries it out; the request lines may
+    -- already have changed by then).
+    s2_dir_out : OUT STD_LOGIC;
     Do_MWR     : IN  STD_LOGIC;
     forceS1    : IN  STD_LOGIC;
     extraS1    : OUT STD_LOGIC
@@ -70,6 +74,8 @@ ARCHITECTURE str OF control IS
     clk_cnt    : NATURAL RANGE 0 TO 7;
     extraS1    : STD_LOGIC;
     int_pending : STD_LOGIC;
+    resume_idle : STD_LOGIC; -- a DMA interrupted an IDL: return to S1_IDLE
+    s2_out      : STD_LOGIC; -- the S2 cycle being entered is a DMA-OUT (a read)
   END RECORD;
 
   TYPE f_reg IS RECORD
@@ -79,6 +85,7 @@ ARCHITECTURE str OF control IS
   SIGNAL mode_in  : STD_LOGIC_VECTOR(1 DOWNTO 0);
   SIGNAL clk_cnt  : STD_LOGIC_VECTOR(2 DOWNTO 0);
   SIGNAL in_S3 : STD_LOGIC;
+  SIGNAL in_S2 : STD_LOGIC;
   SIGNAL r, nxt_r : t_reg;
   SIGNAL f, nxt_f : f_reg;
 
@@ -139,12 +146,14 @@ BEGIN
                 v.clk_cnt := 0;
                 v.reset_DATA := '1';
                 v.extraS1 := '0';
+                v.resume_idle := '0';
                 v.int_pending := '0';
                 v.state := c_S1_INIT;
             WHEN c_S1_INIT =>
                 v.reset_DATA := '1';
                 IF r.clk_cnt = 7 THEN
                     IF dma_in = '1' OR dma_out = '1' THEN 
+                        v.s2_out := dma_out AND NOT dma_in;
                         v.state := c_S2_DMA;
                     ELSE
                         v.state := c_S0_FETCH;
@@ -152,14 +161,25 @@ BEGIN
                 END IF;
             WHEN c_S1_EXEC =>
                 IF r.clk_cnt = 7 THEN
-                    IF dma_in = '1' OR dma_out = '1' THEN
-                        v.state := c_S2_DMA;
-                    ELSIF forceS1 = '1' THEN
+                    -- Datasheet Figure 25's priority: FORCE S0/S1 first, then
+                    -- DMA IN, DMA OUT, INT. The forced second execute cycle of
+                    -- a long branch/skip/NOP must run before a pending DMA --
+                    -- servicing the DMA in between dropped that cycle and left
+                    -- R(P) pointing inside the instruction.
+                    IF forceS1 = '1' THEN
                         v.extraS1 := '1';
                         v.state := c_S1_EXEC;
+                    ELSIF dma_in = '1' OR dma_out = '1' THEN
+                        v.extraS1 := '0';
+                        v.resume_idle := Go_Idle; -- a DMA at an IDL: idle after it
+                        v.s2_out := dma_out AND NOT dma_in; -- DMA IN has priority
+                        v.state := c_S2_DMA;
                     -- A real 1802 only recognises INT while IE=1: with IE=0 there
                     -- is no S3 cycle at all, and IDL is not woken (below).
-                    ELSIF (interrupt = '1' AND ie = '1' AND r.extraS1 = '0') THEN 
+                    -- No extraS1 condition: the interrupt is taken at the end of
+                    -- the instruction, including a multi-cycle one (Figure 25).
+                    ELSIF (interrupt = '1' AND ie = '1') THEN 
+                        v.extraS1 := '0';
                         v.state := c_S3_INTERRUPT;
                     ELSIF (Go_Idle = '1' AND r.extraS1 = '0') THEN 
                         v.state := c_S1_IDLE;
@@ -172,6 +192,8 @@ BEGIN
                 v.tpa := '0'; -- suppressed
                 IF r.clk_cnt = 7 THEN
                     IF dma_in = '1' OR dma_out = '1' THEN
+                        v.resume_idle := '1'; -- ... and comes back here after
+                        v.s2_out := dma_out AND NOT dma_in;
                         v.state := c_S2_DMA;
                     ELSIF interrupt = '1' AND ie = '1' THEN 
                         v.state := c_S3_INTERRUPT;
@@ -180,14 +202,21 @@ BEGIN
             WHEN c_S2_DMA =>
                 IF r.clk_cnt = 7 THEN
                     IF dma_in = '1' OR dma_out = '1' THEN
+                        v.s2_out := dma_out AND NOT dma_in;
                         v.state := c_S2_DMA;
                     ELSIF interrupt = '1' AND ie = '1' THEN 
+                        v.resume_idle := '0';
                         v.state := c_S3_INTERRUPT;
+                    ELSIF r.resume_idle = '1' THEN
+                        -- a DMA that interrupted an IDL: back to idling
+                        -- (Figure 25's S2 -> S1 EXECUTE arrow)
+                        v.state := c_S1_IDLE;
                     ELSE
                         v.state := c_S0_FETCH;
                     END IF;
                 END IF;
             WHEN c_S3_INTERRUPT =>
+                v.resume_idle := '0'; -- an interrupt ends the idle state
                 IF r.clk_cnt = 0 THEN
                     IF ie = '1' THEN
                         v.wr_T := '1';
@@ -204,6 +233,7 @@ BEGIN
                     v.preset_IE := '1';
                 ELSIF r.clk_cnt = 7 THEN
                     IF dma_in = '1' OR dma_out = '1' THEN
+                        v.s2_out := dma_out AND NOT dma_in;
                         v.state := c_S2_DMA;
                     ELSE
                         v.state := c_S0_FETCH;
@@ -275,9 +305,15 @@ BEGIN
   -- cycle. Before S0/S1 that is harmless (they read too), but S3 must
   -- have no memory access at all (datasheet Table 2): an interrupt would
   -- otherwise start with a spurious read. So mask them in S3.
-  nMRD  <= NOT (r.MRD OR (Do_MRD AND NOT in_S3));
+  -- A DMA-IN cycle must not read (Table 2). The direction is recorded when
+  -- the S2 cycle is decided -- on the same falling edge as the state change --
+  -- so the mask is valid from the cycle's very first instant, where the
+  -- previous instruction's read strobe would otherwise still be active.
+  nMRD  <= NOT (r.MRD OR (Do_MRD AND NOT in_S3 AND NOT (in_S2 AND NOT r.s2_out)));
   nMWR  <= NOT (r.MWR OR (Do_MWR AND NOT in_S3));
+  s2_dir_out <= r.s2_out;
   in_S3 <= '1' WHEN r.state = c_S3_INTERRUPT ELSE '0';
+  in_S2 <= '1' WHEN r.state = c_S2_DMA ELSE '0'; -- only a DMA-OUT cycle reads
   wr_T  <= r.wr_T;
   preset_P  <= r.preset_P;
   preset_X  <= r.preset_X;

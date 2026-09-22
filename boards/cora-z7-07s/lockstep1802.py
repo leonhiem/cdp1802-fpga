@@ -68,29 +68,22 @@ def load_events(path):
 
 def group_cycles(ev):
     """Return list of cycles: dict(sc, addr, data, rd, w=(addr,data)|None).
-    A W event is attached to the adjacent C cycle with the same address
-    (checked both the preceding and the following cycle)."""
+    The testbench writes a W line immediately before the C line of the cycle
+    that wrote, so a write always belongs to the next C line."""
     cyc = []
     pending_w = []
     for e in ev:
         if e[0] == 'C':
             c = dict(sc=e[1], addr=e[2], data=e[3], rd=e[4], q=e[5], n=e[6], w=None)
             for w in pending_w:
-                if w[1] == c['addr']:
+                if c['w'] is None:
                     c['w'] = (w[1], w[2])
-                elif cyc and cyc[-1]['addr'] == w[1]:
-                    cyc[-1]['w'] = (w[1], w[2])
                 else:
                     c['w_orphan'] = (w[1], w[2])
             pending_w = []
             cyc.append(c)
         else:
-            # A write whose address equals the last cycle's address most
-            # likely belongs to it (write ended after its TPB).
-            if cyc and cyc[-1]['addr'] == e[1] and cyc[-1]['w'] is None:
-                cyc[-1]['w'] = (e[1], e[2])
-            else:
-                pending_w.append(e)
+            pending_w.append(e)
     return cyc
 
 
@@ -179,6 +172,7 @@ def main():
     n_instr = 0
     n_int = 0
     n_phantom = 0
+    n_dma = 0
     i = 0
     io = {k: 0 for k in range(1, 8)}   # --flat loopback I/O latches
     op_count = [0] * 256
@@ -229,11 +223,42 @@ def main():
         if cy.get('w') is not None:
             err(f"{what}: unexpected write M({cy['w'][0]:04X})<={cy['w'][1]:02X}")
 
-    while i < len(cyc):
-        cy = cyc[i]
-        if cy['sc'] == 2:
+    def dma_cycles(where):
+        """Model every S2 (DMA) cycle at the current position: address R0,
+        DMA-in writes io[4] to M(R0), DMA-out reads M(R0); R0 advances.
+        (Datasheet Table 2 and Figure 25.)"""
+        nonlocal i, n_dma
+        while i < len(cyc) and cyc[i]['sc'] == 2:
+            x = cyc[i]
+            n_dma += 1
+            if x['n'] is not None and x['n'] != 0:
+                err(f"DMA cycle ({where}): N lines are {x['n']}, expected 0")
+            if x['addr'] != c.R[0]:
+                err(f"DMA cycle ({where}): address {x['addr']:04X}, R0={c.R[0]:04X}")
+            w = x.get('w')
+            if w is not None:                       # DMA in
+                if x['rd']:
+                    err(f"Table 2: DMA in ({where}): nMRD asserted (the cycle only writes)")
+                if flat and w[1] != io[4]:
+                    err(f"DMA in ({where}): wrote {w[1]:02X}, the device supplies {io[4]:02X}")
+                if RAM_LO <= w[0] <= RAM_HI:
+                    mem[w[0]] = w[1]
+                hist.append(f"      ---- DMA in  M({w[0]:04X})<={w[1]:02X} ----")
+            elif x['rd']:                           # DMA out
+                if x['addr'] in mem and mem[x['addr']] != x['data']:
+                    err(f"DMA out ({where}): read {x['data']:02X} at {x['addr']:04X}, "
+                        f"memory image has {mem[x['addr']]:02X}")
+                hist.append(f"      ---- DMA out M({x['addr']:04X})=>{x['data']:02X} ----")
+            else:
+                err(f"DMA cycle ({where}): neither a read nor a write")
+            c.R[0] = (c.R[0] + 1) & 0xFFFF
             i += 1
-            continue
+
+    while i < len(cyc):
+        dma_cycles("between instructions")
+        if i >= len(cyc):
+            break
+        cy = cyc[i]
         if cy['sc'] != 0:
             err(f"expected S0 fetch, got SC={cy['sc']} addr {cy['addr']:04X}")
             i += 1
@@ -251,13 +276,15 @@ def main():
         i += 1
         # Collect S1 cycles
         ex = []
+        dma_cycles(f"after the fetch of {op:02X} at {pc:04X}")
         while i < len(cyc) and cyc[i]['sc'] == 1:
             ex.append(cyc[i])
             i += 1
-            if op != 0x00 and (op >> 4) != 0xC:
-                break
+            if (op >> 4) != 0xC:
+                break   # IDL's further idle cycles are handled below
             if (op >> 4) == 0xC and len(ex) == 2:
                 break
+            dma_cycles(f"inside {op:02X} at {pc:04X}")
         if not ex:
             if i >= len(cyc):
                 break  # log ends mid-instruction (simulation stopped)
@@ -328,7 +355,10 @@ def main():
             if lo == 0:
                 # IDL: stays in S1 until interrupt/DMA, reading M(R0)
                 # every cycle (datasheet Table 2)
-                while i < len(cyc) and cyc[i]['sc'] == 1:
+                while i < len(cyc) and cyc[i]['sc'] in (1, 2):
+                    dma_cycles("during IDL")
+                    if i >= len(cyc) or cyc[i]['sc'] != 1:
+                        break
                     x = cyc[i]
                     got = 'W' if x.get('w') is not None else ('R' if x['rd'] else '-')
                     if got != 'R' or x['addr'] != c.R[0]:
@@ -514,8 +544,7 @@ def main():
             hist[-1] += "  [EF branch]"
 
         # Interrupt?
-        while i < len(cyc) and cyc[i]['sc'] == 2:
-            i += 1
+        dma_cycles(f"after {op:02X} at {pc:04X}")
         if i < len(cyc) and cyc[i]['sc'] == 3 and c.IE == 0:
             # A real 1802 never enters S3 with IE=0. control.vhd used to
             # (a "phantom" S3 that didn't vector, but did acknowledge and
@@ -550,7 +579,8 @@ def main():
         if len(hist) > 200:
             del hist[:100]
 
-    print(f"done: {n_instr} instructions, {n_int} interrupts, {n_phantom} phantom S3 (IE=0), {errors} mismatches")
+    print(f"done: {n_instr} instructions, {n_int} interrupts, {n_dma} DMA cycles, "
+          f"{n_phantom} phantom S3 (IE=0), {errors} mismatches")
 
     if idle_addr_diff:
         print("note: address differs from Table 2 on no-access S1 cycles of: "
@@ -559,11 +589,11 @@ def main():
     cond_ops = [o for o in range(0x31, 0x40) if o != 0x38] + \
                [o for o in range(0xC1, 0xD0) if o not in (0xC4, 0xC8)]
     missing_out = [(o, t) for o in cond_ops for t in (False, True) if (o, t) not in outcomes]
-    print(f"opcode coverage: {256 - 1 - len(missing_ops)}/255 (0x68 excluded)"
-          + (": missing " + " ".join(f"{o:02X}" for o in missing_ops) if missing_ops else ""))
-    print(f"branch/skip outcome coverage: {2 * len(cond_ops) - len(missing_out)}/{2 * len(cond_ops)}"
-          + (": missing " + " ".join(f"{o:02X}{'+' if t else '-'}" for o, t in missing_out) if missing_out else ""))
     if want_coverage:
+        print(f"opcode coverage: {256 - 1 - len(missing_ops)}/255 (0x68 excluded)"
+              + (": missing " + " ".join(f"{o:02X}" for o in missing_ops) if missing_ops else ""))
+        print(f"branch/skip outcome coverage: {2 * len(cond_ops) - len(missing_out)}/{2 * len(cond_ops)}"
+              + (": missing " + " ".join(f"{o:02X}{'+' if t else '-'}" for o, t in missing_out) if missing_out else ""))
         if missing_ops or missing_out:
             print("coverage: INCOMPLETE")
             sys.exit(1)

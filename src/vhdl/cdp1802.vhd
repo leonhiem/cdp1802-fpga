@@ -155,6 +155,7 @@ ARCHITECTURE str OF cdp1802 IS
   SIGNAL DMA_OUT   : STD_LOGIC;
   SIGNAL INT       : STD_LOGIC;
   SIGNAL Go_Idle   : STD_LOGIC;
+  SIGNAL s2_dir_out : STD_LOGIC;
   SIGNAL Do_MRD    : STD_LOGIC;
   SIGNAL Do_MWR    : STD_LOGIC;
 
@@ -193,6 +194,7 @@ BEGIN
     state      => state,
     clk_cnt_out => clk_cnt,
     Go_Idle    => Go_Idle,
+    s2_dir_out => s2_dir_out,
     Do_MRD     => Do_MRD,
     Do_MWR     => Do_MWR,
     forceS1    => forceS1,
@@ -217,6 +219,7 @@ BEGIN
     P_out     => P_out,
     I_out     => I_out,
     Go_Idle   => Go_Idle,
+    s2_dir_out => s2_dir_out,
     Do_MRD    => Do_MRD,
     Do_MWR    => Do_MWR,
     Q_in      => Q_in,

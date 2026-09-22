@@ -240,6 +240,21 @@ the same program, so a failure is reproducible: its files stay in
 `sim/ghdl/isa/run_random/seed_<n>/` (`prog.bin`, `cyc.log`, `check.txt`).
 Pass = `PASS: all N random programs (...), 0 mismatches`.
 
+### Layer 1e: interrupt and DMA edge cases (seconds, no ROM, no hardware)
+
+```
+sim/ghdl/isa/run_dma.sh
+```
+
+One program that puts DMA requests and interrupts where they are awkward:
+DMA in and out, single and in bursts; a DMA requested right before a long
+branch, a long skip and a NOP (also delayed, so it lands mid-instruction);
+a DMA during an IDL; DMA and INT together; and an interrupt right after
+every instruction shape, after `RET`, and masked by `DIS`. The lockstep
+model checks every DMA cycle (address = R(0), direction, data, R(0)
+advancing) and every interrupt against the datasheet. Pass =
+`PASS: DMA and interrupt edge cases, N DMA cycles, 0 mismatches`.
+
 ### Layer 2: real-ROM lockstep check (~10 minutes, needs your ROM dump)
 
 ```
@@ -390,9 +405,9 @@ two real bugs found only by testing on real silicon.
   the Cora Z7-07S, with the 50 Hz LC interrupt running, matching the
   real CS1800 -- see the milestone at the top of this file and
   `doc/PRCX18_ANALYSIS.md`.
-- Running PRCX-18 found three real bugs in the core, all fixed: INP did
-  not load D, SHRC/SHLC ignored DF, and an S3 cycle with IE=0 that lost
-  interrupts. An independent
+- Running PRCX-18 and the test programs found ten real bugs in the core,
+  all fixed -- from INP not loading D and SHRC/SHLC ignoring DF to a DMA
+  during a long branch dropping that instruction's second cycle. An independent
   lockstep model now checks every instruction PRCX-18 executes. Details,
   open TODOs and the test plan are in `doc/CDP1802_CORE_REVIEW.md`.
 

@@ -16,6 +16,11 @@ The day-by-day account is in `boards/cora-z7-07s/BRINGUP_LOG.md`.
 | 3 | `control.vhd` (S3) | the state machine entered S3 on INT even when IE=0 (without vectoring) | the S3 cycle acknowledged the LC interrupt, so every 50 Hz tick arriving while interrupts were disabled was **lost**; an IDL with IE=0 also woke up | fixed (TODO 1) |
 | 4 | `instr.vhd` (bus cycles) | memory reads missing or at the wrong address in IDL, IRX, SKP, NOP, long skips, LSKP and not-taken long branches, versus the datasheet's Table 2 | none for PRCX-18 (results were right); matters for memory-mapped hardware with read side effects, e.g. in the real backplane | fixed (TODO 2.2) |
 | 5 | `control.vhd` (S3) | nMRD stayed active for half a clock into the interrupt cycle after a reading instruction | none for PRCX-18; a device with a read side effect would see a spurious read at every interrupt | fixed (TODO 2.3) |
+| 6 | `control.vhd` (S1/S2) | a DMA was serviced *between* the two execute cycles of a long branch/skip/NOP, and the second cycle was then dropped | any DMA arriving during such an instruction left R(P) inside the instruction: the CPU executed the operand byte and ran away | fixed (TODO 2.4) |
+| 7 | `instr.vhd` (INP) | the write strobe ran half a clock past the end of the cycle | a real memory latches on the trailing edge of MWR, so the byte written was the *next* cycle's data | fixed (TODO 2.4) |
+| 8 | `control.vhd` (S1_EXEC) | an interrupt was not taken at the end of a multi-cycle instruction | every interrupt after a long branch/skip/NOP was delayed by one instruction | fixed (TODO 2.4) |
+| 9 | `control.vhd` (S2) | after a DMA that interrupted an IDL, the CPU left the idle state | an `IDL` waiting for an interrupt continued early if a DMA arrived | fixed (TODO 2.4) |
+| 10 | `instr.vhd` (S2) | the DMA direction came from the live request lines during the cycle | a controller that drops its request once the cycle is granted got a DMA cycle with no strobes at all | fixed (TODO 2.4) |
 
 Everything else checked out. Over the 0.93 s of PRCX-18 execution checked
 by the lockstep model (below), 230,893 instructions using **166 distinct
@@ -233,6 +238,81 @@ is an extra read.
 Nothing else changes: the golden references are identical. The same
 half-clock overlap into a DMA cycle (S2) is left for TODO 2.4.
 
+## Bugs 6-10: interrupt and DMA edge cases (TODO 2.4, all fixed)
+
+DMA had never been exercised before this test. The datasheet's Figure 25
+(state transition diagram) and its priority list -- **FORCE S0/S1, then
+DMA IN, DMA OUT, INT** -- are the reference here.
+
+**Bug 6 (severe): a DMA during a long branch dropped its second cycle.**
+`control.vhd` tested for DMA *before* the forced second execute cycle, so
+a DMA request arriving during a long branch, long skip or NOP was served
+in between, and the state machine then went on to the next fetch:
+
+```
+007D C0      fetch LBR
+007E 00      first execute cycle (high byte of the target)
+S2   9000    DMA served here
+007F 80      ... and the second execute cycle never happened
+```
+
+R(P) was left pointing inside the instruction, so the CPU executed the
+branch's own operand byte and ran off into the data area. Fixed by giving
+FORCE S1 priority over DMA, as Figure 25 requires. In the real backplane,
+where DMA is used for disk/console transfers, this would have been a
+random crash whenever a transfer coincided with a long branch.
+
+**Bug 7: INP's write strobe ran past the end of its cycle.** The INP fix
+of bug 1 holds `Do_MWR` for the whole instruction, but the strobes are
+registered half a clock late, so nMWR was still low in the first half of
+the *next* cycle -- with that cycle's data already on the bus. A real
+memory latches on the trailing edge of MWR, so the addressed byte got the
+wrong value (in the failing random program, `M(916B)` received a DMA
+byte instead of the input byte). `instr.vhd` now drops the strobe at
+`clk_cnt = 7`, still covering the sub-cycle where D is latched.
+
+**Bug 8: an interrupt after a multi-cycle instruction was delayed.** The
+S3 transition required `r.extraS1 = '0'`, which is true only for
+single-cycle instructions, so an interrupt pending at the end of a long
+branch/skip/NOP was taken one instruction later. Figure 25 has no such
+restriction: the forced-S1 arrow already has priority, so the interrupt
+belongs at the end of the last execute cycle. The condition was removed.
+
+**Bug 9: a DMA ended an IDL.** Figure 25 returns from S2 to the state it
+interrupted. After a DMA served during an `IDL`, the core went to S0
+FETCH, so the idle ended early. `control.vhd` now remembers that it was
+idling (`resume_idle`) and goes back to S1_IDLE; only an interrupt ends
+the idle.
+
+**Bug 10: the DMA direction was read from the live request lines.**
+`instr.vhd`'s S2 case used `dma_in`/`dma_out` throughout the cycle. A
+controller that drops its request as soon as the cycle is granted (the
+usual design, and what a real one does) left the cycle with no read or
+write strobe at all. Latching the direction inside `instr.vhd` at
+`clk_cnt = 0` was not enough either: the request lines can change between
+the moment `control.vhd` decides to run the cycle (the end of the previous
+cycle) and that first sub-cycle, and then the two disagreed -- a DMA-in
+cycle ran with the read strobe of a DMA-out.
+
+The direction is now decided **once**, in `control.vhd`, at the same
+falling edge as the state change (`s2_out`, DMA IN over DMA OUT as Figure
+25 specifies), and passed to `instr.vhd` (`s2_dir_out`), which carries the
+cycle out. The read-strobe mask uses the same flag, so it is valid from
+the cycle's first instant. All five places that enter S2 record it --
+from S1 EXECUTE, from S1_IDLE, from another S2 (a burst), from S3 (a DMA
+right after an interrupt) and from S1 INIT (right after reset). The last
+two were missed at first, and the random test found them within 1,000
+seeds: such a cycle ran with the *previous* DMA's direction.
+
+This one also shows in the repo's own golden reference: in `tb_cdp18`'s
+DMA-out burst, the last granted cycle used to perform no read at all
+(`nMRD=1`) because the testbench had already released the request. It now
+reads, which is the single changed line in
+`sim/ghdl/reference/tb_cdp18_tpb.txt`.
+
+Also extended: the S3 read-strobe mask of bug 5 now covers a DMA-in
+cycle, which likewise must not read.
+
 ## Not core bugs, but found on the way
 
 - **reg_R power-up (`e9dc776`):** R1-RF started as `'U'` in simulation.
@@ -389,12 +469,23 @@ The lockstep run proves the instructions PRCX-18 uses. To prove the rest:
    arming a new one. And the checker accepts the real race where a
    request withdrawn by an `OUT 6` is still sampled at the end of that
    instruction.
-4. **Interrupt and DMA edge cases:** interrupt arriving on the last
-   sub-cycle of every instruction type, directly after `RET` and `DIS`,
-   during `IDL`, during a long branch's second execute cycle. DMA-in/out
-   between instructions and during IDL, and DMA and INT together
-   (DMA has priority). Extend the lockstep model with S2 (DMA) semantics
-   so these are checked automatically.
+4. **Interrupt and DMA edge cases -- done, all PASS.**
+   `sim/ghdl/isa/run_dma.sh` (README, "Layer 1e"; seconds).
+   `gen_dma_prog.py` puts the awkward cases in one program: DMA in and
+   out, single and in bursts; a DMA requested right before a long branch,
+   a long skip and a NOP (immediate and delayed, so it also lands
+   mid-instruction); a DMA during an IDL; DMA and INT requested together;
+   and an interrupt right after every instruction shape (1-cycle, long
+   branch taken and not taken, long skip, NOP), after `RET`, and masked by
+   `DIS`. The testbench models a DMA controller on io latch 7 (request in
+   or out, burst of 4, delayed start) with the DMA-in byte from io latch 4.
+   `lockstep1802.py` models every S2 cycle -- address = R(0), direction,
+   data, R(0) advancing -- wherever it appears, including between the two
+   execute cycles of a long instruction and inside an IDL, and checks it
+   against Table 2.
+   Result: **0 mismatches**, after fixing bugs 6-10. The random test
+   (TODO 2.3) now exercises DMA too, since its random `OUT 7` data sets
+   the request bits: 1,000 seeds with DMA active also pass.
 5. **Pin-level timing against the datasheet:** TPA/TPB position, nMRD/
    nMWR windows, N lines during I/O, and SC codes per cycle, checked
    against the timing tables (see `doc/CDP1802_MEMORY_TIMING.md`),

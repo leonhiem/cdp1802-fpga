@@ -74,7 +74,7 @@ seq "$FIRST" $((FIRST + COUNT - 1)) | xargs -P "$JOBS" -I{} bash -c 'run_seed {}
 
 PASS=$(grep -c " PASS:" "$WORK/results.txt" || true)
 if [ "$PASS" = "$COUNT" ]; then
-  INSTR=$(sed -E 's/.*done: ([0-9]+) instructions, ([0-9]+) interrupts.*/\1 \2/' "$WORK/results.txt" | awk '{i+=$1; n+=$2} END {print i" instructions, "n" interrupts"}')
+  INSTR=$(sed -E 's/.*done: ([0-9]+) instructions, ([0-9]+) interrupts, ([0-9]+) DMA cycles.*/\1 \2 \3/' "$WORK/results.txt" | awk '{i+=$1; n+=$2; d+=$3} END {print i" instructions, "n" interrupts, "d" DMA cycles"}')
   echo "PASS: all $COUNT random programs (seeds $FIRST..$((FIRST + COUNT - 1))), $INSTR, 0 mismatches"
 else
   echo "FAIL: $((COUNT - PASS)) of $COUNT seeds failed (see above)" >&2

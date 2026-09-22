@@ -1,4 +1,5 @@
 run/
 run_random/
+run_dma/
 .lock_random
 __pycache__/

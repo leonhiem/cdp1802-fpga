@@ -19,7 +19,8 @@
 # control):
 #   R1 = interrupt handler, R2 = stack, R3 = PC, RE = result pointer:
 #   never touched by random code (R2 only through X=2 stack operations).
-#   Pointer registers (R0, R4-RD, RF) always point into the data window:
+#   Pointer registers (R0, R4-RD, RF) always point into the data window
+#   (R0 is also the DMA pointer, so it never holds a code address):
 #   their high byte is only ever set with LDI <safe>/PHI, and INC/DEC/LDA
 #   only drift them slowly. Code lives below 0x4000, data at 0x7000 and up.
 #   OUT 6 (the INT control) only appears in the interrupt macros.
@@ -150,9 +151,11 @@ class RandGen:
             del a.code[start:]
 
     def sep_call(self):
-        """SEP n to a piece of code running with P=n, then SEP 3 back."""
+        """SEP n to a piece of code running with P=n, then SEP 3 back.
+        Never R0: it is the DMA pointer, and a DMA landing while R0 still
+        held this code address would write over the program."""
         a, r = self.a, self.r
-        n = r.choice(PTR)
+        n = r.choice([p for p in PTR if p != 0])
         there, back = a.new_label("sep"), a.new_label("back")
         a.ldr(n, there)
         a.emit(0xD0 | n)

@@ -37,6 +37,9 @@ ENTITY instr IS
     P_out      : IN  STD_LOGIC_VECTOR(3 DOWNTO 0);
     I_out      : IN  STD_LOGIC_VECTOR(3 DOWNTO 0);
     Go_Idle    : OUT STD_LOGIC;
+    -- Direction of the S2 cycle in progress, from control.vhd (decided when
+    -- the cycle was entered, not re-sampled from the request lines here).
+    s2_dir_out : IN  STD_LOGIC := '0';
     Do_MRD     : OUT STD_LOGIC;
     Do_MWR     : OUT STD_LOGIC;
     Q_in       : OUT STD_LOGIC;
@@ -519,7 +522,13 @@ BEGIN
                       -- M(R(X)) are loaded from the exact same bus
                       -- sample -- real INP: "BUS -> D; BUS -> M(R(X))"
                       -- simultaneously, not one cycle apart.
-                      v.Do_MWR := '1';
+                      -- ... but it must end before the machine-cycle boundary:
+                      -- a real memory latches the data on the trailing edge of
+                      -- MWR, and the strobe is registered half a clock late, so
+                      -- holding it through clk 7 wrote the NEXT cycle's data.
+                      IF clk_cnt /= "111" THEN
+                          v.Do_MWR := '1';
+                      END IF;
                       IF clk_cnt = "000" THEN
                           v.wr_A := '1'; -- R(X) -> A
                       ELSIF clk_cnt = "100" THEN
@@ -1246,19 +1255,24 @@ BEGIN
             END IF;
         WHEN c_S2_DMA =>
             v.DtoR := '1'; -- Select R(0)
-            IF dma_in = '1' THEN
+            -- The direction comes from control.vhd, which decided it when
+            -- it entered this cycle (DMA IN has priority over DMA OUT,
+            -- datasheet Figure 25). The request lines are not re-sampled:
+            -- a controller usually drops them as soon as the cycle is
+            -- granted, and the cycle must still be carried out.
+            IF s2_dir_out = '0' THEN
                 IF clk_cnt = "000" THEN
-                    v.wr_A := '1'; -- R(X) -> A
+                    v.wr_A := '1'; -- R(0) -> A
                 ELSIF clk_cnt = "011" THEN
                     v.R_in := std_logic_vector(unsigned(A_out) + 1); -- A++
                     v.Do_MWR := '1';
                 ELSIF clk_cnt = "100" THEN
                     v.wr_R := '1';
                 END IF;
-            ELSIF dma_out = '1' THEN
+            ELSE
                 v.Do_MRD := '1';
                 IF clk_cnt = "000" THEN
-                    v.wr_A := '1'; -- R(X) -> A
+                    v.wr_A := '1'; -- R(0) -> A
                 ELSIF clk_cnt = "011" THEN
                     v.R_in := std_logic_vector(unsigned(A_out) + 1); -- A++
                 ELSIF clk_cnt = "100" THEN
