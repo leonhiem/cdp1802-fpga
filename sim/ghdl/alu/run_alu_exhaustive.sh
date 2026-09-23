@@ -9,7 +9,12 @@
 #
 # Usage: sim/ghdl/alu/run_alu_exhaustive.sh [opcode-hex ...]
 #        (no arguments = all 22 ALU instructions)
-# Env:   JOBS=<n>  parallel simulations (default: number of CPUs - 1)
+# Env:   JOBS=<n>    parallel simulations (default: number of CPUs - 1)
+#        STRIDE=<n>  sample the operand M instead of walking it (default 1 =
+#                    exhaustive). Every D and both DF values are still tried
+#                    for each M, so e.g. STRIDE=64 is 2,048 cases per
+#                    instruction instead of 131,072 -- that is what the quick
+#                    tier of sim/ghdl/run.sh uses.
 #
 # Runs without any ROM image (only our own generated programs), so it can
 # be part of the normal regression. Exit status 0 = every instruction PASS.
@@ -26,11 +31,14 @@ CHECKER="$ROOT/boards/cora-z7-07s/lockstep1802.py"
 ALL_OPS=(F1 F2 F3 F4 F5 F7 74 75 77  F9 FA FB FC FD FF 7C 7D 7F  F6 FE 76 7E)
 if [ $# -gt 0 ]; then OPS=("$@"); else OPS=("${ALL_OPS[@]}"); fi
 JOBS="${JOBS:-$(( $(nproc) > 1 ? $(nproc) - 1 : 1 ))}"
+STRIDE="${STRIDE:-1}"
 
 # Only one run at a time: a second one would wipe this one's files.
 exec 9>"$HERE/.lock"
 if ! flock -n 9; then
   echo "another run_alu_exhaustive.sh is already running" >&2
+  echo "(if you interrupted one, its simulations may still hold the lock:" >&2
+  echo " pkill -f tb_cdp1802_lockstep)" >&2
   exit 1
 fi
 
@@ -67,7 +75,7 @@ run_op() {
   local d="$WORK/op_$op"
   mkdir -p "$d"
   cd "$d"
-  python3 "$HERE/gen_alu_prog.py" "$op" prog
+  python3 "$HERE/gen_alu_prog.py" "$op" prog "$STRIDE"
   local t0=$SECONDS
   ghdl -r "${GHDL_FLAGS[@]}" tb_cdp1802_lockstep -gg_prog_file=prog.hex -gg_log_file=cyc.log \
        --ieee-asserts=disable > sim.txt 2>&1 || true
@@ -87,7 +95,7 @@ run_op() {
   fi
 }
 export -f run_op
-export HERE WORK CHECKER
+export HERE WORK CHECKER STRIDE
 export GHDL_FLAGS_STR="${GHDL_FLAGS[*]}"
 
 echo "=== running ${#OPS[@]} instruction(s), $JOBS in parallel ==="
@@ -101,7 +109,11 @@ for op in "${OPS[@]}"; do
   grep -q " PASS:" "$WORK/$op.result" || FAIL=1
 done
 if [ $FAIL = 0 ]; then
-  echo "PASS: all ${#OPS[@]} ALU instructions match the reference model exhaustively"
+  if [ "$STRIDE" = 1 ]; then
+    echo "PASS: all ${#OPS[@]} ALU instructions match the reference model exhaustively"
+  else
+    echo "PASS: all ${#OPS[@]} ALU instructions match the reference model (operand stride $STRIDE)"
+  fi
 else
   echo "FAIL: see the .check files in $WORK" >&2
   exit 1

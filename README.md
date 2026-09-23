@@ -85,15 +85,21 @@ cd cdp1802-fpga
 sim/ghdl/run.sh
 ```
 
-This analyzes, elaborates, and runs `tb_cdp18_dump` and `tb_cs1800_dump`
-(a few hundred microseconds of simulated CDP1802 execution each, done in
-well under a second), and writes their bus traces into
-`sim/ghdl/reference/`. Those files are already committed as the golden
-reference, so on an unmodified checkout this is a no-op: `git status`
-should show nothing changed. That's the actual point of the script --
-after editing anything under `src/vhdl/`, re-run it and `git diff
-sim/ghdl/reference/` to see exactly what changed, if anything. See
-`sim/ghdl/README.md` for the trace format.
+About 50 seconds, and it needs nothing but GHDL. It runs the whole
+ROM-free test suite: the golden-reference bus traces, the board's own
+sims (including the memory map over all 64K addresses), every opcode with
+every register and both ways through every branch, the interrupt and DMA
+edge cases, the ALU against an independent instruction-set model, and a
+handful of random programs. Each target prints one line, and the summary
+at the end tells you what ran.
+
+The golden-reference part writes its traces into `sim/ghdl/reference/`,
+which are committed, so on an unmodified checkout `git status` should
+show nothing changed. That is the point: after editing anything under
+`src/vhdl/`, re-run and `git diff sim/ghdl/reference/` shows exactly which
+bus cycles changed, if any. See `sim/ghdl/README.md` for the trace format
+and the "Testing" section below for what each part covers -- including
+`sim/ghdl/run.sh full`, the long version.
 
 ### 3. Cross-check with Vivado xsim
 
@@ -318,12 +324,27 @@ _08>
 
 ## Testing
 
-Three layers, from seconds to real silicon. Why each exists and what it
-can and cannot catch is explained in `doc/CDP1802_CORE_REVIEW.md`
-("How the regression testing works"). Run layers 1 and 2 after every
-change to `src/vhdl/`. Run layer 3 before trusting a new bitstream.
+One command runs everything that needs no ROM image and no hardware:
 
-### Layer 1: golden-reference regression (seconds, no ROM, no hardware)
+```
+sim/ghdl/run.sh          # ~50 s: golden references, board sims, every
+                         # opcode, DMA/interrupt edge cases, the ALU and
+                         # random programs -- run this after every change
+sim/ghdl/run.sh full     # ~30-45 min: the same, but the ALU exhaustively
+                         # (131,072 operand combinations per instruction)
+                         # and 1,000 random programs
+```
+
+It prints one line per target and a summary; a failure names the log to
+look at. Individual targets (`sim/ghdl/run.sh isa`, `... alu`, ...) and
+the knobs `STRIDE=` / `SEEDS=` are documented at the top of the script.
+
+The sections below describe each layer, what it catches and what it
+cannot: `doc/CDP1802_CORE_REVIEW.md` ("How the regression testing works")
+has the reasoning. Layer 2 needs your own ROM dump and layer 3 the board,
+so neither is part of the command above.
+
+### Layer 1: golden-reference regression (in `sim/ghdl/run.sh`)
 
 ```
 sim/ghdl/run.sh                  # cdp18/cs1800 bus traces + memory/console assertion tests
@@ -338,12 +359,17 @@ cycles changed (`time addr data nMRD nMWR Q SC`, one line per TPB).
 Only commit the new reference once you've explained every changed line.
 For example, the SHRC/SHLC fix legitimately changed four lines.
 
-### Layer 1b: exhaustive ALU test (~20 minutes on 12 cores, no ROM, no hardware)
+### Layer 1b: the ALU against the reference model (in `sim/ghdl/run.sh`)
 
 ```
-sim/ghdl/alu/run_alu_exhaustive.sh          # all 22 ALU instructions
+sim/ghdl/run.sh alu                         # all 22 ALU instructions
+STRIDE=64 sim/ghdl/run.sh alu               # sampled operands: ~20 s
 sim/ghdl/alu/run_alu_exhaustive.sh 76 7E    # just some (opcodes in hex)
 ```
+
+`STRIDE=n` samples the second operand (M runs 0, n, 2n, ...) while still
+trying every D and both DF values, which is what the quick tier uses;
+`sim/ghdl/run.sh full` runs it exhaustively.
 
 This runs each ALU instruction (ADD, ADC, SD, SDB, SM, SMB, OR, AND, XOR,
 their immediate forms, SHR, SHL, SHRC, SHLC) on the bare core
@@ -360,7 +386,7 @@ first wrong result, for example the old SHRC bug:
 *** MISMATCH #1 at cycle 47: STR R7: expected write M(0100)<=80, got M(0100)<=00
 ```
 
-### Layer 1c: instruction coverage + datasheet bus check (seconds, no ROM, no hardware)
+### Layer 1c: instruction coverage + datasheet bus check (in `sim/ghdl/run.sh`)
 
 ```
 sim/ghdl/isa/run_isa_coverage.sh
@@ -382,7 +408,7 @@ coverage: complete
 PASS: every opcode (0x68 excluded) and every branch/skip outcome, 0 mismatches
 ```
 
-### Layer 1d: random programs (~3 minutes per 200 seeds on 12 cores, no ROM, no hardware)
+### Layer 1d: random programs (in `sim/ghdl/run.sh`)
 
 ```
 sim/ghdl/isa/run_random.sh               # seeds 1..200
@@ -398,7 +424,7 @@ the same program, so a failure is reproducible: its files stay in
 `sim/ghdl/isa/run_random/seed_<n>/` (`prog.bin`, `cyc.log`, `check.txt`).
 Pass = `PASS: all N random programs (...), 0 mismatches`.
 
-### Layer 1e: interrupt and DMA edge cases (seconds, no ROM, no hardware)
+### Layer 1e: interrupt and DMA edge cases (in `sim/ghdl/run.sh`)
 
 ```
 sim/ghdl/isa/run_dma.sh

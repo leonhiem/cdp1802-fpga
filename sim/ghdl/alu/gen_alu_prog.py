@@ -11,9 +11,15 @@
 # (--flat) checks every stored byte and every branch against its own
 # instruction-set model. Shift instructions (no M operand) run D x DF only.
 #
-# Usage: gen_alu_prog.py <opcode-hex> <out-prefix>
+# Usage: gen_alu_prog.py <opcode-hex> <out-prefix> [stride]
 #   writes <out-prefix>.bin (for the checker) and <out-prefix>.hex (one
 #   byte per line, for tb_cdp1802_lockstep.vhd)
+#
+#   stride (default 1) samples the operand M instead of walking it: M runs
+#   0, stride, 2*stride, ... so stride=1 is the exhaustive 131,072 cases
+#   and e.g. stride=64 is 2,048 cases -- every D and both DF values are
+#   still covered for each M. Used by the quick tier of sim/ghdl/run.sh;
+#   the full sweep uses stride 1. Must divide 256.
 #
 # Program layout (all short branches stay inside page 0x00):
 #   R8 -> operand byte (memory ops) or the first immediate byte
@@ -59,13 +65,16 @@ class Asm:
         self.emit(0xF8, value >> 8, 0xB0 | reg, 0xF8, value & 0xFF, 0xA0 | reg)
 
 
-def build(op):
+def build(op, stride=1):
+    assert 256 % stride == 0, "stride must divide 256"
     a = Asm()
     imm = op in IMM_OPS
     shift = op in SHIFT_OPS
 
     a.ldr(7, RESULT_ADDR)
-    a.emit(0xF8, 0x01 if shift else 0x00, 0xAC)  # RC.0: 1 pass for shifts, else 256
+    # RC.0 = number of M values to walk: 1 for the shifts (no M operand),
+    # else 256/stride (0x00 means 256, the loop counts down to zero)
+    a.emit(0xF8, 0x01 if shift else (256 // stride) & 0xFF, 0xAC)
     a.emit(0xE8)                                  # SEX 8
     imm_pos = []
 
@@ -88,7 +97,7 @@ def build(op):
     a.branch(0x3A, "inner")                       # BNZ inner
 
     if not shift:
-        a.emit(0x08, 0xFC, 0x01, 0x58)            # LDN R8 ; ADI 01 ; STR R8
+        a.emit(0x08, 0xFC, stride, 0x58)          # LDN R8 ; ADI stride ; STR R8
         if imm:
             a.emit(0x5A)                          # STR RA (second copy)
     a.emit(0x2C, 0x8C)                            # DEC RC ; GLO RC
@@ -127,15 +136,16 @@ def relocate(a, offset):
 
 
 def main():
-    if len(sys.argv) != 3:
-        print(f"usage: {sys.argv[0]} <opcode-hex> <out-prefix>", file=sys.stderr)
+    if len(sys.argv) not in (3, 4):
+        print(f"usage: {sys.argv[0]} <opcode-hex> <out-prefix> [stride]", file=sys.stderr)
         print("opcodes: " + " ".join(f"{o:02X}={n}" for o, n in sorted(ALL_OPS.items())), file=sys.stderr)
         sys.exit(1)
     op = int(sys.argv[1], 16)
+    stride = int(sys.argv[3]) if len(sys.argv) > 3 else 1
     if op not in ALL_OPS:
         print(f"not an ALU opcode here: {op:02X}", file=sys.stderr)
         sys.exit(1)
-    image = build(op)
+    image = build(op, stride)
     open(sys.argv[2] + ".bin", "wb").write(image)
     with open(sys.argv[2] + ".hex", "w") as f:
         for b in image:

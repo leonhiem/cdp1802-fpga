@@ -495,8 +495,18 @@ The lockstep run proves the instructions PRCX-18 uses. To prove the rest:
    normal memory read cycle (Fig. 8, with TPA). Not yet changed.
 6. **Reset/WAIT/CLEAR modes:** LOAD mode (`nCLEAR=0, nWAIT=1` with DMA
    loading), PAUSE mid-cycle, reset in the middle of an instruction.
-7. Put 1 and 2 into `sim/ghdl/run.sh` so they run on every change. That
-   works without the copyrighted ROM, since they are our own programs.
+7. **One command for everything ROM-free -- done.** `sim/ghdl/run.sh`
+   now runs the golden references, the board sims (including the memory
+   map over all 64K addresses), instruction coverage, the DMA/interrupt
+   edge cases, the ALU and random programs: ~50 s, which is short enough
+   to run after every change to `src/vhdl/`. It keeps that budget by
+   sampling instead of cutting: the ALU test gained a `STRIDE` that walks
+   the second operand in steps (every D and both DF values are still
+   tried for each M), and the random tier runs 8 seeds.
+   `sim/ghdl/run.sh full` runs the ALU exhaustively (131,072 combinations
+   per instruction) and 1,000 random seeds, ~30-45 min. Each target logs
+   to `sim/ghdl/run/<target>.log` and only its verdict reaches the
+   console, so a failure names the log.
 8. **Same programs on the real CS1800.** The ALU programs are plain 1802
    code. A variant that accumulates a checksum (e.g. CRC-16) over all
    results and DF values, instead of relying on the bus log, could run

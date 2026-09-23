@@ -7,13 +7,31 @@ the previous one to confirm nothing but the intended thing changed.
 
 ## Running
 
+`sim/ghdl/run.sh` is the whole ROM-free regression, not just this golden
+dump: it also runs the board's sims and the core test suites under
+`sim/ghdl/isa/` and `sim/ghdl/alu/`.
+
 ```
-sim/ghdl/run.sh            # all four checks below
-sim/ghdl/run.sh cdp18      # just tb_cdp18_dump
-sim/ghdl/run.sh cs1800     # just tb_cs1800_dump
-sim/ghdl/run.sh memory     # just tb_cs1800_memory
-sim/ghdl/run.sh console    # just tb_cs1800_console
+sim/ghdl/run.sh            # quick tier, ~50 s -- run after every change
+sim/ghdl/run.sh full       # exhaustive ALU + 1000 random programs, ~30-45 min
+sim/ghdl/run.sh cdp18      # a single target; see the list below
 ```
+
+| target | what it runs |
+|---|---|
+| `cdp18`, `cs1800` | the golden-reference bus traces (this file) |
+| `cdp18_sync` | the same stimulus through the registered-read memory, diffed against `cdp18`'s reference |
+| `memory`, `console` | assertion testbenches for the memory split and the I/O decode |
+| `board` | `boards/cora-z7-07s/sim/run.sh` (board wrapper, shared RAM, and the memory map over all 64K addresses) |
+| `isa` | every opcode, every register variant, both ways through every branch, checked against the datasheet's Table 2 |
+| `dma` | interrupt and DMA edge cases |
+| `alu` | every ALU instruction against an independent instruction-set model (`STRIDE=n` samples the second operand) |
+| `random` | random generated programs (`SEEDS=n`) |
+
+Each target prints a single verdict; full output goes to
+`sim/ghdl/run/<target>.log`. The quick tier uses `STRIDE=64` and
+`SEEDS=8`; `full` uses `STRIDE=1` and `SEEDS=1000`. Both can be set by
+hand on any invocation.
 
 Requires GHDL with the mcode backend (tested with GHDL 4.1.0, `--std=08`).
 Analysis order follows `hdllib.cfg`'s `synth_files` list at the repo root.

@@ -27,6 +27,8 @@ JOBS="${JOBS:-$(( $(nproc) > 1 ? $(nproc) - 1 : 1 ))}"
 exec 9>"$HERE/.lock_random"
 if ! flock -n 9; then
   echo "another run_random.sh is already running" >&2
+  echo "(if you interrupted one, its simulations may still hold the lock:" >&2
+  echo " pkill -f tb_cdp1802_lockstep)" >&2
   exit 1
 fi
 

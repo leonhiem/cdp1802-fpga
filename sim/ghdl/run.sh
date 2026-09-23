@@ -11,8 +11,30 @@
 # the testbench and relies on its own ASSERT ... SEVERITY FAILURE checks
 # (see boards/cora-z7-07s/sim/run.sh's tb_shared_ram for the same style).
 #
-# Usage: sim/ghdl/run.sh [cdp18] [cs1800] [memory] [console] [cdp18_sync]
-#        (with no arguments, all five are run)
+# Usage:
+#   sim/ghdl/run.sh              the quick tier: everything below that runs
+#                                in well under a minute -- run this after
+#                                every change to src/vhdl/
+#   sim/ghdl/run.sh full         the same, but with the exhaustive ALU sweep
+#                                (all 131,072 operand combinations per
+#                                instruction) and 1,000 random programs
+#                                instead of their sampled/short versions
+#                                (~30-45 minutes)
+#   sim/ghdl/run.sh <target> ... individual targets, any of:
+#       cdp18 cs1800 cdp18_sync  golden-reference bus traces
+#       memory console           assertion testbenches
+#       board                    the Cora board's own sims, incl. the
+#                                memory map over all 64K addresses
+#       isa                      every opcode, every register, both ways
+#                                through every branch (TODO 2.2)
+#       dma                      interrupt and DMA edge cases (TODO 2.4)
+#       alu                      the ALU against the reference model
+#                                (TODO 2.1; env STRIDE, see below)
+#       random                   random programs (TODO 2.3; env SEEDS)
+#
+# None of this needs the PRCX-18 ROM image: the programs are generated
+# here. The real-ROM lockstep test is separate, in
+# boards/cora-z7-07s/sim/run_prcx18_lockstep.sh (see README.md, "Testing").
 #
 # cdp18_sync (added 2026-09-15, see boards/cora-z7-07s/BRINGUP_LOG.md's
 # "milestone 3l"): runs cdp18_sync (ram_sync's registered, A_full-fed
@@ -121,11 +143,42 @@ run_check() {
   echo "PASS: $name"
 }
 
+# The quick tier samples the ALU's operand space and runs a few random
+# seeds; "full" runs both to completion. Override either directly with
+# STRIDE=... / SEEDS=... on any invocation.
+QUICK=(cdp18 cs1800 memory console cdp18_sync board isa dma alu random)
+
+# Runs one of the other test scripts: full output to a log, only its
+# verdict on the console (and the tail of the log if it fails).
+run_script() {
+  local name="$1"; shift
+  local log="$WORK/$name.log"
+  mkdir -p "$WORK"
+  echo "=== $name ==="
+  if "$@" > "$log" 2>&1; then
+    grep -E "^PASS" "$log" | tail -2
+  else
+    echo "FAIL: $name -- see $log" >&2
+    tail -25 "$log" >&2
+    exit 1
+  fi
+}
+
 TARGETS=("$@")
 if [ ${#TARGETS[@]} -eq 0 ]; then
-  TARGETS=(cdp18 cs1800 memory console cdp18_sync)
+  TARGETS=("${QUICK[@]}")
+  STRIDE="${STRIDE:-64}"
+  SEEDS="${SEEDS:-8}"
+elif [ "${TARGETS[0]}" = "full" ]; then
+  TARGETS=("${QUICK[@]}")
+  STRIDE="${STRIDE:-1}"
+  SEEDS="${SEEDS:-1000}"
 fi
+STRIDE="${STRIDE:-1}"
+SEEDS="${SEEDS:-200}"
+export STRIDE
 
+START=$SECONDS
 for t in "${TARGETS[@]}"; do
   case "$t" in
     cdp18)    run_one tb_cdp18_dump  "$TB/tb_cdp18_dump.vhd"  tb_cdp18_tpb.txt ;;
@@ -134,6 +187,18 @@ for t in "${TARGETS[@]}"; do
     console)  run_check tb_cs1800_console "$TB/tb_cs1800_console.vhd" ;;
     cdp18_sync) run_and_diff tb_cdp18_sync_dump "$TB/tb_cdp18_sync_dump.vhd" \
                   tb_cdp18_sync_tpb.txt "$REF/tb_cdp18_tpb.txt" ;;
+    board)    run_script board  "$ROOT/boards/cora-z7-07s/sim/run.sh" ;;
+    isa)      run_script isa    "$HERE/isa/run_isa_coverage.sh" ;;
+    dma)      run_script dma    "$HERE/isa/run_dma.sh" ;;
+    alu)      run_script alu    "$HERE/alu/run_alu_exhaustive.sh" ;;
+    random)   run_script random "$HERE/isa/run_random.sh" 1 "$SEEDS" ;;
     *) echo "unknown target: $t" >&2; exit 1 ;;
   esac
 done
+
+echo "=== summary ==="
+echo "PASS: ${#TARGETS[@]} targets (${TARGETS[*]}) in $((SECONDS - START))s"
+if [ "$STRIDE" != 1 ] || [ "$SEEDS" != 1000 ]; then
+  echo "      quick tier: ALU operand stride $STRIDE, $SEEDS random seeds."
+  echo "      Run 'sim/ghdl/run.sh full' for the exhaustive ALU sweep and 1000 seeds."
+fi
