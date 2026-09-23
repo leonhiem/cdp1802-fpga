@@ -486,7 +486,10 @@ The lockstep run proves the instructions PRCX-18 uses. To prove the rest:
    Result: **0 mismatches**, after fixing bugs 6-10. The random test
    (TODO 2.3) now exercises DMA too, since its random `OUT 7` data sets
    the request bits: 1,000 seeds with DMA active also pass.
-5. **Pin-level timing against the datasheet:** TPA/TPB position, nMRD/
+5. **Pin-level timing against the datasheet** (the simulation half is
+   board-independent and worth doing before any real wiring -- it may
+   still find core bugs, which is why 2.5 and 2.6 come before the
+   backplane work): TPA/TPB position, nMRD/
    nMWR windows, N lines during I/O, and SC codes per cycle, checked
    against the timing tables (see `doc/CDP1802_MEMORY_TIMING.md`),
    This matters for plugging the Cora into the real backplane. Known
@@ -593,6 +596,46 @@ loop, which starts a `busybox devmem` process for every GPIO access (about
   which is also closer to the real CS1800's serial port.
 
 ### TODO 6: the core in the real CS1800 backplane
+
+**The backplane target is not the Cora.** The user has built a module that
+plugs into the CS1800 backplane in place of the original CPU card,
+carrying a **Terasic DE0-Nano** (Cyclone IV, Quartus) with 3V3<->5V level
+translation: MOSFET shifters for the single-direction signals and
+TXS0108E for the bidirectional ones. The Cora keeps its role as the
+simulation/regression platform and a second synthesis target; the DE0
+board is what goes into the rack (open question, to discuss: a separate
+repo, or `boards/de0-nano/` beside `boards/cora-z7-07s/` here -- one repo
+keeps the shared `src/vhdl/` from diverging, which matters after ten core
+fixes). Note the module only has to implement the **CPU**: memory, the
+CDP1854 and the LC all come from the rack, so no BRAM memory model, no
+UART model, no AXI and no TX FIFO travel with it.
+
+Three hardware notes from reviewing that module (2026-09-23), to check
+before or during bring-up:
+
+1. **TXS0108E on the data bus is the part to watch.** It is an
+   auto-direction translator with one-shot accelerators and weak (~4k)
+   internal pull-ups, meant for lightly driven buses; against a strongly
+   driven 5V CMOS bus with real backplane capacitance it can glitch or
+   latch the wrong way during turnaround. Auto-direction is not needed
+   here: the core already provides an explicit direction signal
+   (`DATA_OE`, which `nMRD` mirrors), so a direction-controlled
+   translator such as **74LVC8T245** with DIR driven from it is faster
+   and deterministic. Worth having on hand if the data bus misbehaves.
+2. **MOSFET shifters are likely too slow for the strobes.** A BSS138-style
+   shifter rises through its pull-up: with 10k and backplane capacitance
+   that is easily hundreds of ns, against a 125 ns clock period at 4 MHz.
+   Fine for the EF inputs, marginal for TPA/TPB/nMRD/nMWR and the clock.
+   Push-pull alternatives: **74HCT245/541 powered at 5V** for 3V3->5V
+   (HCT inputs read 2.0V as high, so 3.3V drives them cleanly) and
+   **74LVC245 at 3V3** for 5V->3V3 (5V-tolerant inputs). Or lower the
+   pull-ups to 1k-2.2k.
+3. **Clock and the rack's watchdog.** The watchdog checks that the crystal
+   runs, so the CPU card generates and drives the clock. The DE0-Nano's
+   50 MHz does not divide to exactly 4 MHz (/12 = 4.167 MHz), so use a
+   PLL -- and confirm whether the backplane expects that clock driven out
+   (at 5V) for the other cards.
+
 What has to change or be verified when the FPGA's CDP1802 drives the real
 backplane, instead of the Cora's internal memory/UART models:
 - **Electrical interface:** the backplane is 5 V CMOS (4000-series and the
