@@ -576,8 +576,31 @@ The lockstep run proves the instructions PRCX-18 uses. To prove the rest:
    core is changed and it becomes a hard check (it fails 24/24 cycles
    today, which doubles as the mutation check).
 
-   Remaining for this TODO: N-line and SC validity windows per cycle, and
-   then the constraints file below. Reference numbers are in
+   **Second deviation, same root cause: the N lines are half a CLOCK late
+   too.** The datasheet says "the N bits are low at all times except when
+   an I/O instruction is being executed"; ours come up half a clock after
+   the execute cycle starts and stay half a clock past its end, so they
+   are briefly non-zero at the start of the next cycle. Both this and the
+   TPB position come from the same asymmetry: `instr.vhd` registers its
+   outputs on the *rising* clock edge while `control.vhd` changes state on
+   the *falling* one, so everything instr.vhd drives sits half a clock
+   late against the machine cycle. Warned under `g_allow_n_half_clock`.
+
+   A deliberate decision is needed on whether to re-align them, and it
+   should be taken once for both, since one change fixes both. Inside the
+   FPGA nothing notices; on the backplane TPA and TPB are what I/O
+   controllers time the data bus against.
+
+   **Measurement note worth keeping:** TPA is the only clean pin-level
+   anchor, but the machine cycle does not start there -- state 0 begins
+   two phases earlier, where SC changes. Attributing those two phases to
+   the wrong cycle makes a correct core look like it drives N a whole
+   cycle early; that false finding happened once while writing this test
+   and the header now warns about it.
+
+   SC is checked as "all states are valid at TPA" (datasheet, SC0/SC1 pin
+   description) and passes. Remaining for this TODO: the constraints file
+   below. Reference numbers are in
    `doc/CDP1802_MEMORY_TIMING.md`,
    This matters for plugging the FPGA into the real backplane. The TPA
    candidate listed here before (suppressed in `S1_IDLE` for the IDL

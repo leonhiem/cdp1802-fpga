@@ -25,6 +25,14 @@
 --   whole machine cycle is 16 phases. Datasheet state N0 = phase 2N-2,
 --   N1 = phase 2N-1, since Figure 4 puts TPA's rise in state 1.
 --
+--   NOTE on that anchor: TPA is the only clean reference a pin-level test
+--   has, but the machine cycle does not begin there -- state 0 starts two
+--   phases EARLIER, and that is where SC changes and where the next cycle's
+--   N lines come up. So phases 14 and 15 of one TPA-to-TPA window already
+--   belong to the next machine cycle. The SC and N checks below account for
+--   that; forgetting it makes a correct core look like it drives N a cycle
+--   early, which is exactly the false finding this note exists to prevent.
+--
 --   What Figure 4 shows, and what this checks:
 --     - TPA is one CLOCK period wide (rises in state 1, falls in state 2);
 --     - TPB is one CLOCK period wide (rises in state 6, falls in state 7);
@@ -62,7 +70,16 @@ ENTITY tb_cdp1802_pin_timing IS
     -- the datasheet has 5. Everything else in Figure 4 matches.
     -- TRUE reports it as a warning and keeps the regression green; set it
     -- FALSE once the core is changed, and this becomes a hard check.
-    g_allow_tpb_half_clock : BOOLEAN := TRUE
+    g_allow_tpb_half_clock : BOOLEAN := TRUE;
+    -- KNOWN DEVIATION, same root cause as the one above: the N lines stay
+    -- asserted half a CLOCK period past the end of the execute cycle, so
+    -- they are briefly non-zero at the very start of the next cycle. The
+    -- datasheet says "the N bits are low at all times except when an I/O
+    -- instruction is being executed". instr.vhd registers its outputs on
+    -- the rising clock edge while control.vhd changes state on the falling
+    -- one, which shifts both N and TPB half a clock late against the
+    -- machine cycle. TRUE reports it as a warning; FALSE makes it a check.
+    g_allow_n_half_clock : BOOLEAN := TRUE
   );
 END tb_cdp1802_pin_timing;
 
@@ -178,6 +195,14 @@ BEGIN
     VARIABLE mwr_low      : INTEGER := -1;
     VARIABLE mwr_high     : INTEGER := -1;
     VARIABLE hi_byte      : STD_LOGIC_VECTOR(7 DOWNTO 0) := (OTHERS => '0');
+    VARIABLE sc_at_start  : STD_LOGIC_VECTOR(1 DOWNTO 0) := "00";
+    VARIABLE sc_moved     : BOOLEAN := FALSE; -- SC changed before TPA's trailing edge
+    VARIABLE n_nonzero    : BOOLEAN := FALSE; -- N left 000 somewhere in this cycle
+    VARIABLE n_first      : INTEGER := -1;    -- ... first at this phase
+    VARIABLE n_last       : INTEGER := -1;    -- ... and last at this one
+    -- N seen in phases 14/15, which belong to the NEXT machine cycle
+    VARIABLE n_carried    : BOOLEAN := FALSE;
+    VARIABLE n_carry_next : BOOLEAN := FALSE;
     VARIABLE l            : LINE;
     VARIABLE err          : NATURAL := 0;
 
@@ -244,6 +269,38 @@ BEGIN
             WRITELINE(OUTPUT, l);
             err := err + 1;
           END IF;
+          -- "All states are valid at TPA" (datasheet, SC0/SC1 pin
+          -- description): SC must not still be moving when the outside
+          -- world samples it.
+          IF sc_moved THEN
+            WRITE(l, STRING'("FAIL: cycle "));
+            WRITE(l, cycles);
+            WRITE(l, STRING'(": SC changed before TPA's trailing edge; "));
+            WRITE(l, STRING'("the datasheet says all states are valid at TPA"));
+            WRITELINE(OUTPUT, l);
+            err := err + 1;
+          END IF;
+          -- "The N bits are low at all times except when an I/O
+          -- instruction is being executed" -- so never outside an execute
+          -- cycle (S1 = SC "01").
+          IF n_carried AND NOT n_nonzero AND sc_at_start /= "01"
+             AND g_allow_n_half_clock THEN
+            IF cycles = 13 THEN -- say it once
+              WRITE(l, STRING'("WARNING: the N lines stay asserted half a "));
+              WRITE(l, STRING'("CLOCK past the execute cycle, so they are "));
+              WRITE(l, STRING'("non-zero at the start of the next one -- see "));
+              WRITE(l, STRING'("g_allow_n_half_clock and TODO 2.5"));
+              WRITELINE(OUTPUT, l);
+            END IF;
+          ELSIF (n_nonzero OR n_carried) AND sc_at_start /= "01" THEN
+            WRITE(l, STRING'("FAIL: cycle "));
+            WRITE(l, cycles);
+            WRITE(l, STRING'(": N lines left 000 in a non-execute cycle (SC="));
+            WRITE(l, to_bitvector(sc_at_start));
+            WRITE(l, STRING'(")"));
+            WRITELINE(OUTPUT, l);
+            err := err + 1;
+          END IF;
           IF g_verbose THEN
             WRITE(l, STRING'("cycle "));  WRITE(l, cycles);
             WRITE(l, STRING'(" SC="));    WRITE(l, to_bitvector(sc));
@@ -253,6 +310,8 @@ BEGIN
             WRITE(l, STRING'("..."));     WRITE(l, tpb_fall);
             WRITE(l, STRING'(" addr_sw="));   WRITE(l, addr_change);
             WRITE(l, STRING'(" MRD_lo="));    WRITE(l, mrd_low);
+            WRITE(l, STRING'(" N!=0@"));   WRITE(l, n_first);
+            WRITE(l, STRING'(".."));       WRITE(l, n_last);
             WRITE(l, STRING'(" MWR="));   WRITE(l, mwr_low);
             WRITE(l, STRING'("..."));     WRITE(l, mwr_high);
             WRITELINE(OUTPUT, l);
@@ -263,6 +322,9 @@ BEGIN
         tpa_fall := -1; tpb_rise := -1; tpb_fall := -1;
         addr_change := -1; mrd_low := -1; mwr_low := -1; mwr_high := -1;
         hi_byte := addr;
+        sc_at_start := sc; sc_moved := FALSE; n_nonzero := FALSE;
+        n_carried := n_carry_next; n_carry_next := FALSE;
+        n_first := -1; n_last := -1;
       END IF;
 
       IF phase >= 0 THEN
@@ -270,6 +332,16 @@ BEGIN
         IF tpb = '1' AND tpb_prev = '0' AND tpb_rise < 0 THEN tpb_rise := phase; END IF;
         IF tpb = '0' AND tpb_prev = '1' AND tpb_fall < 0 THEN tpb_fall := phase; END IF;
         IF addr /= hi_byte AND addr_change < 0 THEN addr_change := phase; END IF;
+        IF sc /= sc_at_start AND (tpa_fall < 0 OR phase <= tpa_fall) THEN sc_moved := TRUE; END IF;
+        IF n /= "000" THEN
+          IF phase >= c_cycle_len - 2 THEN
+            n_carry_next := TRUE; -- belongs to the next cycle, see the header
+          ELSE
+            n_nonzero := TRUE;
+          END IF;
+          IF n_first < 0 THEN n_first := phase; END IF;
+          n_last := phase;
+        END IF;
         IF nmrd = '0' AND mrd_prev = '1' AND mrd_low < 0 THEN mrd_low := phase; END IF;
         IF nmwr = '0' AND mwr_prev = '1' AND mwr_low < 0 THEN mwr_low := phase; END IF;
         IF nmwr = '1' AND mwr_prev = '0' AND mwr_low >= 0 AND mwr_high < 0 THEN mwr_high := phase; END IF;
