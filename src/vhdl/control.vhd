@@ -75,6 +75,7 @@ ARCHITECTURE str OF control IS
     extraS1    : STD_LOGIC;
     int_pending : STD_LOGIC;
     resume_idle : STD_LOGIC; -- a DMA interrupted an IDL: return to S1_IDLE
+    init_stretch : STD_LOGIC; -- the 9th clock of the initialization cycle
     s2_out      : STD_LOGIC; -- the S2 cycle being entered is a DMA-OUT (a read)
   END RECORD;
 
@@ -122,6 +123,16 @@ BEGIN
               v.clk_cnt := r.clk_cnt + 1;
           END IF;
 
+          -- "Each machine cycle requires the same period of time, 8 clock
+          -- pulses, except the initialization cycle, which requires 9"
+          -- (datasheet, Run-Mode State Transitions). The extra clock is
+          -- taken by holding the counter at 7 once, rather than widening
+          -- clk_cnt -- instr.vhd decodes it as 3 bits.
+          IF r.state = c_S1_INIT AND r.clk_cnt = 7 AND r.init_stretch = '0' THEN
+              v.clk_cnt := 7;
+              v.init_stretch := '1';
+          END IF;
+
           IF r.clk_cnt = 0 THEN
               v.tpa := '1';
           ELSIF r.clk_cnt = 6 THEN
@@ -147,11 +158,13 @@ BEGIN
                 v.reset_DATA := '1';
                 v.extraS1 := '0';
                 v.resume_idle := '0';
+                v.init_stretch := '0';
                 v.int_pending := '0';
                 v.state := c_S1_INIT;
             WHEN c_S1_INIT =>
                 v.reset_DATA := '1';
-                IF r.clk_cnt = 7 THEN
+                IF r.clk_cnt = 7 AND r.init_stretch = '1' THEN
+                    v.init_stretch := '0';
                     IF dma_in = '1' OR dma_out = '1' THEN 
                         v.s2_out := dma_out AND NOT dma_in;
                         v.state := c_S2_DMA;
@@ -189,7 +202,13 @@ BEGIN
                     END IF;
                 END IF;
             WHEN c_S1_IDLE =>
-                v.tpa := '0'; -- suppressed
+                -- "TPA is suppressed in IDLE when the CPU is in the load
+                -- mode" (datasheet, TPA pin description). Only there: the
+                -- IDL instruction's idle cycles are ordinary memory read
+                -- cycles (Table 2, note 4 -> Figure 8) and do have TPA.
+                IF r.mode = c_LOAD THEN
+                    v.tpa := '0';
+                END IF;
                 IF r.clk_cnt = 7 THEN
                     IF dma_in = '1' OR dma_out = '1' THEN
                         v.resume_idle := '1'; -- ... and comes back here after

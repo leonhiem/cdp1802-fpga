@@ -21,6 +21,8 @@ The day-by-day account is in `boards/cora-z7-07s/BRINGUP_LOG.md`.
 | 8 | `control.vhd` (S1_EXEC) | an interrupt was not taken at the end of a multi-cycle instruction | every interrupt after a long branch/skip/NOP was delayed by one instruction | fixed (TODO 2.4) |
 | 9 | `control.vhd` (S2) | after a DMA that interrupted an IDL, the CPU left the idle state | an `IDL` waiting for an interrupt continued early if a DMA arrived | fixed (TODO 2.4) |
 | 10 | `instr.vhd` (S2) | the DMA direction came from the live request lines during the cycle | a controller that drops its request once the cycle is granted got a DMA cycle with no strobes at all | fixed (TODO 2.4) |
+| 11 | `control.vhd` (init) | the initialization cycle after reset was 8 clocks | the datasheet gives it 9 (every other cycle is 8), so every reset released the CPU one clock early | fixed (TODO 2.6) |
+| 12 | `control.vhd` (S1_IDLE) | TPA was suppressed for the IDL instruction as well as for LOAD mode | an `IDL` produced idle cycles with no TPA, so a memory system latching the high address byte on TPA saw nothing | fixed (TODO 2.6) |
 
 Everything else checked out. Over the 0.93 s of PRCX-18 execution checked
 by the lockstep model (below), 230,893 instructions using **166 distinct
@@ -313,6 +315,70 @@ reads, which is the single changed line in
 Also extended: the S3 read-strobe mask of bug 5 now covers a DMA-in
 cycle, which likewise must not read.
 
+## Bugs 11-12: the control modes (control.vhd) -- TODO 2.6, fixed
+
+The CLEAR and WAIT pins select four modes, and only RESET and RUN had ever
+been exercised:
+
+| CLEAR | WAIT | mode |
+|---|---|---|
+| L | L | **LOAD** -- idle; DMA-IN fills memory with no bootstrap loader, and does *not* force execution afterwards |
+| L | H | **RESET** |
+| H | L | **PAUSE** -- the timing generator stops; state is preserved |
+| H | H | **RUN** |
+
+**Bug 11: the initialization cycle was 8 clocks, not 9.** The datasheet is
+explicit: "Each machine cycle requires the same period of time, 8 clock
+pulses, except the initialization cycle, which requires 9". Ours ran 8, so
+every reset released the CPU one clock early relative to a real chip --
+invisible inside the FPGA, but a real backplane's reset circuit and any
+scope comparison would see it. `control.vhd` now holds the cycle counter
+at 7 for one extra clock in `S1_INIT` (the counter is decoded as 3 bits by
+`instr.vhd`, so stretching it is cheaper than widening it everywhere).
+
+**Bug 12: TPA was suppressed during the IDL instruction.** The datasheet
+says "TPA is suppressed in IDLE when the CPU is in the **load mode**" --
+only there. Our `S1_IDLE` suppressed it unconditionally, and that state
+serves both LOAD and the `IDL` instruction, whose idle cycles are ordinary
+memory read cycles (Table 2, note 4 -> Figure 8). A memory system latches
+the high address byte on TPA, so an idling CPU presented no address.
+Now conditional on the mode. (This was the open candidate listed under
+TODO 2.5.)
+
+**What the new test covers** (`tb/vhdl/tb_cdp1802_modes.vhd`, target
+`modes` in `sim/ghdl/run.sh`), all checked per clock:
+- no TPA/TPB while reset is held;
+- LOAD: TPA suppressed in its idle cycles, the CPU never fetches, and a
+  13-byte program is loaded **purely by DMA-IN** -- no bootstrap;
+- the initialization cycle is 9 clocks, measured TPB to TPB;
+- the first fetch after reset is at 0x0000 and the loaded program runs
+  (it sets Q and writes a marker);
+- the `IDL` instruction: TPA *is* present in its idle cycles, and the CPU
+  stays idle until an interrupt wakes it;
+- PAUSE: no machine cycle passes while WAIT is low, and execution
+  continues correctly afterwards;
+- reset in the middle of an instruction: Q clears, and the CPU restarts
+  from 0x0000 through another 9-clock initialization cycle.
+
+Mutation checks: reverting either fix makes the test fail with the exact
+message for it.
+
+**Hardware status:** both fixes are invisible on the Cora by construction --
+the 9th init clock is one clock, once, at reset, and nothing there is
+phase-locked to the CPU's cycle boundary; TPA's only consumer on that board
+is `cs1800.vhd`'s high-address latch, which feeds `dbg_ram_addr`/the ILA and
+nothing else (the memory uses `A_full`). So the Cora can neither confirm nor
+deny them, and the board's own "boots once per FPGA programming" problem
+(BRINGUP_LOG.md, 2026-09-24/25) is unrelated to this TODO. Where bug 12
+really has to be checked is the DE0-Nano in the real backplane, whose memory
+cards latch the high address byte on TPA (TODO 2.5/6).
+
+**Known, not changed:** Table 2 gives LOAD's idle cycles the address
+`R(0)-1` with MRD active (it shows the byte just loaded). Ours drives no
+read there. Reaching R(0)-1 would need an address-path decrement the
+design does not have, and nothing can act on a cycle with no strobe, so
+this stays a documented difference.
+
 ## Not core bugs, but found on the way
 
 - **reg_R power-up (`e9dc776`):** R1-RF started as `'U'` in simulation.
@@ -492,12 +558,17 @@ The lockstep run proves the instructions PRCX-18 uses. To prove the rest:
    backplane work): TPA/TPB position, nMRD/
    nMWR windows, N lines during I/O, and SC codes per cycle, checked
    against the timing tables (see `doc/CDP1802_MEMORY_TIMING.md`),
-   This matters for plugging the Cora into the real backplane. Known
-   candidate: `control.vhd` suppresses TPA in `S1_IDLE`. Table 2 says
-   that is right for LOAD mode (note 5) but not for IDL, which uses the
-   normal memory read cycle (Fig. 8, with TPA). Not yet changed.
-6. **Reset/WAIT/CLEAR modes:** LOAD mode (`nCLEAR=0, nWAIT=1` with DMA
-   loading), PAUSE mid-cycle, reset in the middle of an instruction.
+   This matters for plugging the FPGA into the real backplane. The TPA
+   candidate listed here before (suppressed in `S1_IDLE` for the IDL
+   instruction as well as LOAD) turned out to be real and is fixed as
+   bug 12; the remaining work is the pulse positions and widths
+   themselves, which on the DE0-Nano module also have to account for the
+   level translators' delays (TODO 6).
+6. **Reset/WAIT/CLEAR modes -- done, all PASS.** `sim/ghdl/run.sh modes`
+   (`tb/vhdl/tb_cdp1802_modes.vhd`), in the quick tier. LOAD, RESET, PAUSE
+   and RUN are now exercised, including loading a program by DMA with no
+   bootstrap and waking an `IDL` with an interrupt. It found bugs 11 and
+   12 (see above).
 7. **One command for everything ROM-free -- done.** `sim/ghdl/run.sh`
    now runs the golden references, the board sims (including the memory
    map over all 64K addresses), instruction coverage, the DMA/interrupt
@@ -570,6 +641,29 @@ second EPROM (macro assembler).
   `run_prcx18_lockstep.sh`, and the board test.
 - Longer soak test on the Cora (hours, LC on) with commands such as
   `TSKL`/`DMP`, checking for respawns or hangs.
+- **`io_sel_reg` has no reset (Cora only).** `cs1800_io_select` (our CD4076
+  model) has no reset input, so the latch survives the CPU's system reset.
+  Bit 7 is the CDP1854's master reset, and the board's captures show it
+  stuck at `0x80` in the state where PRCX-18 boots only once per FPGA
+  programming (see BRINGUP_LOG.md, 2026-09-24/25). Low priority by
+  decision: on the DE0-Nano the CDP1854 and the CD4076 are real chips
+  outside the FPGA, so this is a model gap, not a core or backplane issue.
+  Workaround: program the FPGA before a test session.
+- **Board tests need repeats.** `boot_test.sh` makes one boot cheap, and a
+  single boot per bitstream was enough to produce a confident but wrong
+  A/B result once already (same BRINGUP_LOG entry). Run it several times
+  per bitstream, and treat a mixed result as "the board has its own
+  problem", not as evidence about the RTL.
+- **Constrain the generated clocks.** The Cora build has no XDC of its
+  own at all, so `report_timing_summary` analyses only `clk_fpga_0`
+  (4 MHz) and reports "all user specified timing constraints are met"
+  while 43 register pins are driven by logic-generated clocks it never
+  looks at: 35 from `control.vhd`'s TPB register (the whole CDP1854 and
+  the `OUT 1` latch are clocked by `tpb_i`) and 8 from the TPA register
+  (`cs1800.vhd`'s high-address latch). There is plenty of margin at
+  4 MHz -- TPB falls mid-cycle, far from any data transition -- but
+  nothing is checking it. Either `create_generated_clock` for both, or
+  clock those blocks from `CLOCK` with TPA/TPB as enables.
 - Make sure nothing copyrighted or secret is committed (ROM dump,
   schematics, board password): `git ls-files` review.
 - Carry the core fixes back to the original
@@ -648,7 +742,7 @@ backplane, instead of the Cora's internal memory/UART models:
   datasheet-exact (TODO 2.5).
 - **Pin timing (TODO 2.5):** TPA/TPB width and position, MRD/MWR windows,
   data setup/hold at the real clock, N lines during I/O, SC codes.
-  Known: TPA is suppressed in IDL, but should only be in LOAD mode.
+  TPA in IDL: fixed (bug 12), suppressed only in LOAD mode now.
   The execute-cycle address/access per instruction already matches
   Table 2 (bug 4).
 - **Clock and control inputs:** clock from the backplane (or the Cora

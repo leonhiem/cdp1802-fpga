@@ -23,6 +23,8 @@
 #   sim/ghdl/run.sh <target> ... individual targets, any of:
 #       cdp18 cs1800 cdp18_sync  golden-reference bus traces
 #       memory console           assertion testbenches
+#       modes                    the CLEAR/WAIT control modes: LOAD, RESET,
+#                                PAUSE, RUN (TODO 2.6)
 #       board                    the Cora board's own sims, incl. the
 #                                memory map over all 64K addresses
 #       isa                      every opcode, every register, both ways
@@ -146,7 +148,7 @@ run_check() {
 # The quick tier samples the ALU's operand space and runs a few random
 # seeds; "full" runs both to completion. Override either directly with
 # STRIDE=... / SEEDS=... on any invocation.
-QUICK=(cdp18 cs1800 memory console cdp18_sync board isa dma alu random)
+QUICK=(cdp18 cs1800 memory console modes cdp18_sync board isa dma alu random)
 
 # Runs one of the other test scripts: full output to a log, only its
 # verdict on the console (and the tail of the log if it fails).
@@ -184,6 +186,7 @@ for t in "${TARGETS[@]}"; do
     cdp18)    run_one tb_cdp18_dump  "$TB/tb_cdp18_dump.vhd"  tb_cdp18_tpb.txt ;;
     cs1800)   run_one tb_cs1800_dump "$TB/tb_cs1800_dump.vhd" tb_cs1800_tpb.txt ;;
     memory)   run_check tb_cs1800_memory  "$TB/tb_cs1800_memory.vhd" ;;
+    modes)    run_check tb_cdp1802_modes  "$TB/tb_cdp1802_modes.vhd" ;;
     console)  run_check tb_cs1800_console "$TB/tb_cs1800_console.vhd" ;;
     cdp18_sync) run_and_diff tb_cdp18_sync_dump "$TB/tb_cdp18_sync_dump.vhd" \
                   tb_cdp18_sync_tpb.txt "$REF/tb_cdp18_tpb.txt" ;;

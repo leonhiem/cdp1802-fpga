@@ -22,6 +22,7 @@ sim/ghdl/run.sh cdp18      # a single target; see the list below
 | `cdp18`, `cs1800` | the golden-reference bus traces (this file) |
 | `cdp18_sync` | the same stimulus through the registered-read memory, diffed against `cdp18`'s reference |
 | `memory`, `console` | assertion testbenches for the memory split and the I/O decode |
+| `modes` | the CLEAR/WAIT control modes: LOAD (loading by DMA with no bootstrap), RESET (incl. the 9-clock initialization cycle), PAUSE and RUN |
 | `board` | `boards/cora-z7-07s/sim/run.sh` (board wrapper, shared RAM, and the memory map over all 64K addresses) |
 | `isa` | every opcode, every register variant, both ways through every branch, checked against the datasheet's Table 2 |
 | `dma` | interrupt and DMA edge cases |

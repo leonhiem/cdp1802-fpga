@@ -2513,3 +2513,130 @@ PRCX-18's task list reports stacks `7F`/`77`/`74` (System/Console/TSKL,
 (top `0x5FFF`) reports `5F`/`57`/`54` for the same three tasks: exactly
 0x2000 lower, since the OS lays its stacks out relative to the top of the
 RAM it detected. End-to-end confirmation of the new memory map.
+
+## 2026-09-24: the CLEAR/WAIT control modes (TODO 2.6) -- two more core bugs
+
+Only RESET and RUN had ever been exercised. New `tb/vhdl/tb_cdp1802_modes.vhd`
+(`sim/ghdl/run.sh modes`) drives all four modes and checks per clock.
+
+- **Bug 11:** the initialization cycle after reset was 8 clocks; the
+  datasheet gives it 9 ("every machine cycle ... 8 clock pulses, except
+  the initialization cycle, which requires 9"). Fixed by holding the
+  cycle counter at 7 for one extra clock in `S1_INIT`.
+- **Bug 12:** TPA was suppressed for the `IDL` instruction as well as for
+  LOAD mode. The datasheet suppresses it only "in IDLE when the CPU is in
+  the load mode"; an `IDL`'s idle cycles are ordinary memory read cycles
+  and do have TPA, which is what a memory board latches the high address
+  byte on. Now conditional on the mode. (This was TODO 2.5's open
+  candidate.)
+
+What the test covers: no TPA/TPB while reset is held; LOAD with a 13-byte
+program loaded purely by DMA-IN and no fetches; the 9-clock init cycle
+measured TPB to TPB; first fetch at 0x0000 and the program running; IDL
+idling with TPA until an interrupt wakes it; PAUSE freezing and resuming;
+and reset in the middle of an instruction. Reverting either fix makes the
+test fail with the message for it.
+
+Golden references: every timestamp shifts by one clock (250 ns) because
+the init cycle is longer. The only other change is one row where
+`tb_cdp18`'s DMA-out/DMA-in burst boundary moves by one cycle -- that
+testbench drives its DMA requests on a fixed time schedule, so shifting
+the CPU moves which cycle is the last of the first burst.
+
+## 2026-09-24/25: TODO 2.6 on the Cora -- a bad bisect, then the real finding: the board boots once per FPGA programming
+
+The TODO 2.6 bitstream did not boot PRCX-18, while the very same RTL booted
+in GHDL (`run_prcx18_lockstep.sh`: banner, `_08>`, full `DMP`, 295,626
+instructions, 0 lockstep mismatches) and passed all 11 targets of
+`sim/ghdl/run.sh`. What the board did instead, from an ILA capture that is
+*completely static* across its whole 4096-sample window (1 ms, since
+`clk_fpga_0` is 4 MHz -- the same clock rate as the simulation):
+
+    SC=S1  A_full=00D6  data=E0  nMRD=0  nMWR=1  TPB pulsing  Q=1
+
+Not a wedged CPU: that is the `IDL` signature, since Table 2 gives an idle
+cycle a memory read of `M(R(0))`. The simulation's own cycle log places it
+exactly -- `0x00D6` is what `R(0)` holds after the `SEP R3` at ROM
+`0x00D5` (sim cycle 400,448 of 636,705), just past the RAM sweep, where
+the OS hands over to the task at `0x0220` that prints the banner. The
+board emitted one or two `0x00` bytes, `uart_control` was still `0x00`,
+and the OS's RAM bounds word was never stored.
+
+### The bisect that was wrong
+
+One bitstream per row, each programmed fresh, one boot each:
+
+| RTL | GHDL | Cora |
+|---|---|---|
+| HEAD (neither fix) | pass | booted |
+| bug 11 only (9-clock init cycle) | pass | booted |
+| bugs 11+12 (init cycle + TPA in IDLE) | pass | hung |
+
+That looked like a clean A/B implicating bug 12, and it was reported as
+one. It was wrong. Rebuilding the identical bugs-11+12 RTL and running the
+*same* bitstream repeatedly gave PASS, FAIL, FAIL and then 0 pass / 6 fail.
+**One boot per bitstream is not evidence**: the pass/fail pattern above was
+sampling noise. `boot_test.sh` exists so this is cheap to do properly --
+use it several times per bitstream before concluding anything.
+
+Both fixes are also, by inspection, invisible on the Cora, which should
+have been the first thing checked:
+- the 9th init clock is one clock, once, at reset, and nothing in this
+  design is phase-locked to the CPU's cycle boundary;
+- TPA's only consumer here is `cs1800.vhd:224` -> `dbg_ram_addr` -> ILA
+  probe 0. The memory takes `a_full_i` (the CPU's own internal address)
+  directly, so TPA in `IDL` drives nothing but a debug probe.
+
+They are datasheet-correctness fixes. Where they will matter is the
+DE0-Nano in the real backplane, whose memory cards latch the high address
+byte on TPA -- an idling CPU presenting no address is a real defect there.
+
+### The real finding
+
+The failure is **persistent, not random**: after a certain boot the board
+stays broken until it is reprogrammed. Re-running the ROM loader does not
+recover it, and neither does zeroing all of RAM over AXI with the CPU held
+in reset (ruling out the "device-clear sweep writes uninitialised RAM to
+every I/O port" mechanism this log already records) -- the ROM read back
+correct (`0x40000000` = `0xBF900071`) throughout.
+
+What survives a CPU reset is the I/O latch: `cs1800_io_select` (our CD4076
+model) has **no reset input at all**, and the captures show
+`io_sel_reg = 0x80`. Bit 7 is the CDP1854's master reset -- the real
+hardware source PRCX-18 uses via `OUT 11` (see `cs1800_prcx18_top.vhd`'s
+own comment). A UART held in master reset stalls the boot exactly where
+this one stalls: after the RAM sweep, as the banner starts. So the leading
+theory is that a boot sets bit 7 and our latch never sees (or never
+accepts) the write that clears it, leaving the UART reset forever, while a
+fresh bitstream clears the latch to `0x00` and the next boot works.
+
+**Deliberately not chased further** (the user's call, 2026-09-25): on the
+DE0-Nano the CDP1854 and the CD4076 are real chips on the real backplane,
+not models inside the FPGA, so this is a Cora-only model gap. The
+workaround is what we have always done by accident: program the FPGA
+before a test session. Recorded as TODO 4's "io_sel_reg has no reset".
+
+### New: two scripts this produced
+
+- **`boot_test.sh`** -- the board-side counterpart of `sim/ghdl/run.sh`:
+  program, load the ROM with the CPU held in reset, release reset, drain
+  the TX FIFO, print the console output and the OS's own RAM bounds word,
+  exit non-zero unless `_08>` appears. `--freeze-lc` releases with
+  `ctrl_in=0x48` (LC stopped) to take the 50 Hz interrupt out of the
+  picture. The board password comes from `BOARD_PW`, never from the file.
+- **`ila2cyc.py`** -- converts an ILA capture into exactly the `cyc.log`
+  format `sim/tb_prcx18_lockstep.vhd` writes, so a board capture can be
+  diffed line by line against the simulation of the same RTL (and fed to
+  `lockstep1802.py`). Columns are found by probe name, so extra probes do
+  not break it. Locating the hang above to a single named ROM address was
+  done this way.
+
+### Also found: the Cora build has no timing constraints of its own
+
+`report_timing_summary` says "all user specified timing constraints are
+met" while analysing only `clk_fpga_0` (4 MHz). 43 register pins are
+driven by logic-generated clocks it never looks at: 35 from `control.vhd`'s
+TPB register (the whole CDP1854 and the `OUT 1` latch are clocked by
+`tpb_i`) and 8 from the TPA register. There is plenty of margin at 4 MHz --
+TPB falls mid-cycle, far from any data transition -- but nothing is
+checking it. TODO 4.

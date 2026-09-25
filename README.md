@@ -424,6 +424,20 @@ the same program, so a failure is reproducible: its files stay in
 `sim/ghdl/isa/run_random/seed_<n>/` (`prog.bin`, `cyc.log`, `check.txt`).
 Pass = `PASS: all N random programs (...), 0 mismatches`.
 
+### Layer 1f: the CLEAR/WAIT control modes (in `sim/ghdl/run.sh`)
+
+```
+sim/ghdl/run.sh modes
+```
+
+Drives the four modes the CLEAR and WAIT pins select and checks the CPU
+per clock: no TPA/TPB while reset is held; **LOAD** (a program is loaded
+purely by DMA-IN, with no bootstrap loader, while the CPU never fetches);
+the **9-clock initialization cycle** after reset, measured TPB to TPB;
+the first fetch at 0x0000 and the loaded program running; the `IDL`
+instruction idling *with* TPA until an interrupt wakes it; **PAUSE**
+freezing and resuming; and a reset in the middle of an instruction.
+
 ### Layer 1e: interrupt and DMA edge cases (in `sim/ghdl/run.sh`)
 
 ```
@@ -473,7 +487,24 @@ yourself: `python3 boards/cora-z7-07s/lockstep1802.py <rom.bin> <cyc.log> [max_e
 
 ### Layer 3: on the Cora Z7-07S
 
-Build, program, load the ROM and open the console exactly as in
+One command does the whole thing -- program, load the ROM with the CPU
+held in reset, release reset, drain the console and check the result:
+
+```
+export BOARD_PW=<the board's root password>
+export BOARD_HOST=<the board's IP address>
+boards/cora-z7-07s/boot_test.sh --program        # or without --program
+```
+
+It prints the console output and PRCX-18's own RAM bounds word, and exits
+non-zero unless the `_08>` prompt appears. The three steps have to happen
+in that order: the ROM is Block RAM loaded at runtime, not part of the
+bitstream, so a freshly programmed board is running a blank ROM until the
+loader has run. Use this for every A/B test of a bitstream, and run it
+more than once before concluding anything from a single result.
+
+To do it by hand, or to open an interactive session, build, program, load
+the ROM and open the console exactly as in
 "5. Run the real PRCX-18 OS" above. Before reprogramming, make sure no
 old `devmem` loop or console is still running on the board
 (`ps | grep -E "devmem|interactive"`): reprogramming underneath one can
@@ -502,6 +533,17 @@ What to check:
 
 Output arrives at ~35 characters/s through the devmem bridge; that is
 expected, not a fault.
+
+If a boot goes wrong, `capture_ila_prcx18.tcl` dumps the ILA and
+`boards/cora-z7-07s/ila2cyc.py` turns that capture into the same
+machine-cycle log the simulation writes, so the board and a simulation of
+the same RTL can be diffed directly:
+
+```
+boards/cora-z7-07s/ila2cyc.py capture.csv > board.log
+head -1 board.log                     # find that cycle in the sim's log
+diff <(tail -n +<line> boards/cora-z7-07s/sim/run_lockstep/cyc.log) board.log
+```
 
 ## Repository layout
 
