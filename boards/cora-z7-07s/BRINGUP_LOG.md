@@ -2591,7 +2591,12 @@ They are datasheet-correctness fixes. Where they will matter is the
 DE0-Nano in the real backplane, whose memory cards latch the high address
 byte on TPA -- an idling CPU presenting no address is a real defect there.
 
-### The real finding
+### The real finding (WRONG -- superseded by the 2026-09-25 entry below)
+
+Everything in this section is a dead end: `io_sel_reg` was a *symptom*.
+The cause was untimed clocks, found the next evening. Kept as written
+because the reasoning here is exactly how a symptom gets mistaken for a
+cause.
 
 The failure is **persistent, not random**: after a certain boot the board
 stays broken until it is reprogrammed. Re-running the ROM loader does not
@@ -2640,3 +2645,76 @@ TPB register (the whole CDP1854 and the `OUT 1` latch are clocked by
 `tpb_i`) and 8 from the TPA register. There is plenty of margin at 4 MHz --
 TPB falls mid-cycle, far from any data transition -- but nothing is
 checking it. TODO 4.
+
+## 2026-09-25: root cause -- 43 register pins had no clock, and nobody was timing the I/O
+
+**The Cora now boots PRCX-18 6 times out of 6.** The cause of every odd
+board result in this log's last two entries was not the CPU core, not the
+CD4076 model and not the ROM loader: TPA and TPB come out of flip-flops in
+`control.vhd`, and four blocks used them as *clocks*. A clock made of logic
+is a clock the timing engine does not analyse, so
+`report_timing_summary` cheerfully said "all user specified timing
+constraints are met" while reporting, in a section nobody had read:
+
+    There are 35 register/latch pins with no clock driven by root clock
+    pin: .../u_control/f_reg[tpb]/Q
+    There are  8 register/latch pins with no clock driven by root clock
+    pin: .../u_control/r_reg[tpa]/Q
+
+43 pins -- the whole CDP1854, the CD4076 latch (`cs1800_io_select`),
+`io_out` and `cs1800.vhd`'s high-address latch -- got whatever setup/hold
+margin each place-and-route happened to hand them. Same VHDL, different
+bitstream, different luck.
+
+**The measurements** (cold board, power-cycled, programmed fresh, ROM
+reloaded, `boot_test.sh`):
+
+| RTL | logic-generated clocks | boots |
+|---|---|---|
+| pre-TODO-2.6 | present | 4 pass / 1 fail |
+| TODO 2.6 | present | 0 pass / 7 fail |
+| TODO 2.6 | **removed** | **6 pass / 0 fail** |
+
+Everything now fits. The pre-TODO-2.6 design -- the "stable" 32KB system,
+and `git diff` confirms its RTL is bit-for-bit what those 4/5 runs ran --
+was already failing one boot in five; it only ever looked stable because
+nobody booted it five times in a row. TODO 2.6's `control.vhd` change
+perturbed placement and pushed the margin from mostly-working to
+never-working, which is why the single-run bisect in the previous entry
+looked so convincing. And every failure capture pointed at the state of
+exactly those untimed blocks (`io_sel = 0x80`, `uart_control = 0x00`).
+
+**The fix** is to delete the ripple clocks rather than constrain them.
+`cdp1854`, `cs1800_io_select` and `io_out` gained a `ce` port (default
+`'1'`, so the other three instantiations are untouched), and
+`cs1800_prcx18_top`/`cs1800.vhd` now drive them from `CLOCK` with TPA/TPB
+as the *enable*. Both strobes are high for exactly one CLOCK period, so
+each block still updates once per machine cycle, sampling the same values
+one CLOCK later -- but inside the constrained 4 MHz domain. Vivado now
+reports **0 register/latch pins with no clock**, and its "timing met"
+finally covers the whole design. This is also the precondition for TODO
+2.5: pin-level timing work is meaningless while a third of the I/O logic
+is outside the analysis.
+
+Verified: all 11 targets of `sim/ghdl/run.sh`; the real-ROM lockstep
+(`run_prcx18_lockstep.sh`, 0 mismatches, full `DMP`) including under the
+board's own reset condition; 6/6 boots; and `TSKL` on the board reporting
+stacks `7F`/`77`/`74`, the same as the 2026-09-22 milestone.
+
+**New in the runner:** `tb_prcx18_lockstep.vhd` takes the reset-time
+`ctrl_in` as a generic and `run_prcx18_lockstep.sh` takes `CTRL_RESET`,
+because the testbench held `ctrl=0x61` during reset (LC running) while the
+board's loader writes `0x01`, freezing the LC generator for the whole ROM
+load so the 50 Hz interrupt starts at the instant reset is released. That
+phase was never simulated. `CTRL_RESET=00000001` reproduces it -- and it
+passes, which is how the LC phase was ruled out as the cause.
+
+**Method note, the expensive lesson of these two days:** two conclusions
+were published from one boot per bitstream, and both were wrong -- first
+"the change is guilty", then "the change is innocent". The failure rate
+was ~20% before the change and 100% after, so a single boot could support
+either story. The user's challenge ("are you sure the hang is not caused
+by the VHDL changes? changes in control.vhd are fundamental") is what
+forced the repeats that produced the table above. Run `boot_test.sh` at
+least five times per bitstream, and read the timing report's
+`check_no_clock` section before trusting "timing met".

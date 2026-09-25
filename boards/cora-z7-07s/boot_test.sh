@@ -68,9 +68,14 @@ echo "=== loading the ROM and releasing reset ==="
 python3 "$HERE/gen_load_prcx18_rom.py" "$ROM" > /tmp/load_and_run.sh || exit 1
 # --freeze-lc: release the CPU with ctrl_in(5)=0, which stops the 50 Hz
 # line-clock generator (and so the LC interrupt) instead of starting it at
-# the same instant reset is released. PRCX-18 reaches its prompt either
-# way -- the user confirmed that on real hardware with the CPU board's
-# CLOCK OFF switch (doc/PRCX18_ANALYSIS.md).
+# the same instant reset is released.
+#
+# EXPECT A DOUBLE BOOT with this flag. PRCX-18 does reach its prompt with
+# the line clock off, but it resets itself once on the way -- user-verified
+# on the real CS1800 with the CPU board's CLOCK OFF switch, and only at
+# power-on, not on a reset press. So two banners here are correct
+# behaviour, not a fault; this flag is for taking the LC interrupt out of
+# the picture, not for a clean pass/fail.
 if [ "$FREEZE_LC" = 1 ]; then
   sed -i 's/32 0x68/32 0x48/' /tmp/load_and_run.sh
   echo "(LC frozen: releasing with ctrl_in=0x48)"

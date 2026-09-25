@@ -346,9 +346,15 @@ BEGIN
   -- FPGA/1802 note: OUT asserts nMRD, INP asserts nMWR on this CPU --
   -- see cs1800_console.vhd's header for why (confirmed against
   -- instr.vhd, matches cs1800.vhd's own pre-existing io_out.vhd wiring).
+  -- CLOCK with TPB as the enable, not TPB as the clock: TPB is generated
+  -- by control.vhd's own register, and driving flip-flops from it put 35
+  -- register pins on a net Vivado never timed ("no clock driven by root
+  -- clock pin ... f_reg[tpb]/Q"), so their margin was whatever each
+  -- place-and-route happened to give them. See BRINGUP_LOG.md.
   u_io_select : ENTITY work.cs1800_io_select
   PORT MAP (
-    clk     => tpb_i,
+    clk     => CLOCK,
+    ce      => tpb_i,
     data_in => ram_wdata,
     nCS     => sel1_n,
     nWE     => ram_nmrd,
@@ -357,7 +363,8 @@ BEGIN
 
   u_uart_a : ENTITY work.cdp1854
   PORT MAP (
-    clk      => tpb_i,
+    clk      => CLOCK, -- TPB is the enable below, not the clock -- see u_io_select
+    ce       => tpb_i,
     -- Real hardware reset source, per the user's own schematic reading
     -- 2026-09-18: PRCX-18 resets the CDP1854 itself, early in boot, via
     -- OUT 11 (N=1, Q=1) toggling bit 7 of the CD4076 latch

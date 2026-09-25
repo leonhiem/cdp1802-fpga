@@ -168,10 +168,19 @@ BEGIN
     dbg_D        => dbg_D
   );
 
-  p_reg_high_addr : PROCESS(tpa, addr)
+  -- The high address byte, latched at TPA the way a real memory card's
+  -- 4042 does -- but clocked by CLOCK with TPA as an enable, not by TPA
+  -- itself. TPA comes out of control.vhd's own register, so using it as
+  -- a clock puts these flip-flops on a logic-generated net that no
+  -- timing tool analyses (Vivado reported 8 register pins here "with no
+  -- clock"). TPA is high for exactly one CLOCK period, so this samples
+  -- the same address, one CLOCK later, in the constrained domain.
+  p_reg_high_addr : PROCESS(CLOCK)
   BEGIN
-    IF rising_edge(tpa) THEN
-      addr_high <= addr;
+    IF rising_edge(CLOCK) THEN
+      IF tpa = '1' THEN
+        addr_high <= addr;
+      END IF;
     END IF;
   END PROCESS;
 
@@ -181,9 +190,12 @@ BEGIN
   n_io_out_sel <= '0' WHEN n = "101" ELSE '1';
   n_io_in_sel <= '0' WHEN (n = "101" AND nmrd = '1') ELSE '1';
 
+  -- Same reasoning as p_reg_high_addr above: CLOCK with TPB as the
+  -- enable, instead of TPB as the clock.
   u_io_out : ENTITY work.io_out
   PORT MAP (
-    clk => tpb,
+    clk => CLOCK,
+    ce  => tpb,
     data => data,
     output => io_output,
     nWE => nmrd,

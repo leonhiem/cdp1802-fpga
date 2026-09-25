@@ -363,15 +363,15 @@ TODO 2.5.)
 Mutation checks: reverting either fix makes the test fail with the exact
 message for it.
 
-**Hardware status:** both fixes are invisible on the Cora by construction --
-the 9th init clock is one clock, once, at reset, and nothing there is
-phase-locked to the CPU's cycle boundary; TPA's only consumer on that board
-is `cs1800.vhd`'s high-address latch, which feeds `dbg_ram_addr`/the ILA and
-nothing else (the memory uses `A_full`). So the Cora can neither confirm nor
-deny them, and the board's own "boots once per FPGA programming" problem
-(BRINGUP_LOG.md, 2026-09-24/25) is unrelated to this TODO. Where bug 12
-really has to be checked is the DE0-Nano in the real backplane, whose memory
-cards latch the high address byte on TPA (TODO 2.5/6).
+**Hardware status:** verified on the Cora, 6 boots out of 6. Getting there
+took two days and cost a wrong conclusion in each direction, because this
+change was what finally exposed a latent defect in the board design: TPA and
+TPB were used as clocks, which left 43 register pins outside Vivado's timing
+analysis, so the Cora's boot was a per-build lottery (see BRINGUP_LOG.md,
+2026-09-25). With those clocks removed the same RTL boots reliably. Bug 12
+itself still cannot be *confirmed* by the Cora -- TPA's only consumer there
+feeds the ILA -- so its real test remains the DE0-Nano in the backplane,
+whose memory cards latch the high address byte on TPA (TODO 2.5/6).
 
 **Known, not changed:** Table 2 gives LOAD's idle cycles the address
 `R(0)-1` with MRD active (it shows the byte just loaded). Ours drives no
@@ -641,29 +641,30 @@ second EPROM (macro assembler).
   `run_prcx18_lockstep.sh`, and the board test.
 - Longer soak test on the Cora (hours, LC on) with commands such as
   `TSKL`/`DMP`, checking for respawns or hangs.
-- **`io_sel_reg` has no reset (Cora only).** `cs1800_io_select` (our CD4076
-  model) has no reset input, so the latch survives the CPU's system reset.
-  Bit 7 is the CDP1854's master reset, and the board's captures show it
-  stuck at `0x80` in the state where PRCX-18 boots only once per FPGA
-  programming (see BRINGUP_LOG.md, 2026-09-24/25). Low priority by
-  decision: on the DE0-Nano the CDP1854 and the CD4076 are real chips
-  outside the FPGA, so this is a model gap, not a core or backplane issue.
-  Workaround: program the FPGA before a test session.
+- **`io_sel_reg` has no reset -- correct as is, no change needed.** The
+  latch survives the CPU's system reset, and the real SIO board's CD4076
+  has no reset either (user, from the schematic): PRCX-18 walks the whole
+  I/O space at boot and writes every port to 0, `OUT 11` included. The
+  `io_sel_reg = 0x80` seen in every failing capture was the *symptom* of
+  the untimed-clock defect above -- the CPU stalling after PRCX-18 sets
+  bit 7 to reset the CDP1854 and before it clears it again -- not its
+  cause. Recorded here because it looked like a cause for a whole
+  evening.
 - **Board tests need repeats.** `boot_test.sh` makes one boot cheap, and a
   single boot per bitstream was enough to produce a confident but wrong
   A/B result once already (same BRINGUP_LOG entry). Run it several times
   per bitstream, and treat a mixed result as "the board has its own
   problem", not as evidence about the RTL.
-- **Constrain the generated clocks.** The Cora build has no XDC of its
-  own at all, so `report_timing_summary` analyses only `clk_fpga_0`
-  (4 MHz) and reports "all user specified timing constraints are met"
-  while 43 register pins are driven by logic-generated clocks it never
-  looks at: 35 from `control.vhd`'s TPB register (the whole CDP1854 and
-  the `OUT 1` latch are clocked by `tpb_i`) and 8 from the TPA register
-  (`cs1800.vhd`'s high-address latch). There is plenty of margin at
-  4 MHz -- TPB falls mid-cycle, far from any data transition -- but
-  nothing is checking it. Either `create_generated_clock` for both, or
-  clock those blocks from `CLOCK` with TPA/TPB as enables.
+- **The generated clocks -- done, 2026-09-25.** TPA and TPB were used as
+  clocks, leaving 43 register pins with no clock at all in Vivado's eyes
+  (35 on TPB: the whole CDP1854 and the `OUT 1` latch; 8 on TPA), while
+  the report still said "all user specified timing constraints are met".
+  Their margin was per-build luck, and it was making the Cora's PRCX-18
+  boot unreliable -- 1 failure in 5 before TODO 2.6, 7 in 7 after it, 0 in
+  6 once fixed. `cdp1854`, `cs1800_io_select` and `io_out` now take a `ce`
+  (default `'1'`), and the Cora top drives them from `CLOCK` with TPA/TPB
+  as the enable. Vivado now reports 0 pins with no clock. Full account in
+  BRINGUP_LOG.md.
 - Make sure nothing copyrighted or secret is committed (ROM dump,
   schematics, board password): `git ls-files` review.
 - Carry the core fixes back to the original

@@ -34,7 +34,14 @@ USE work.prcx18_rom_pkg.ALL;
 
 ENTITY tb_prcx18_lockstep IS
   GENERIC (
-    g_max_cycles : NATURAL := 4_000_000 -- CLOCK cycles after reset release (1 s at 4 MHz)
+    g_max_cycles : NATURAL := 4_000_000; -- CLOCK cycles after reset release (1 s at 4 MHz)
+    -- ctrl_in while reset is held. The default keeps LC running through
+    -- reset; the board's own loader (gen_load_prcx18_rom.py) writes 0x01
+    -- instead, which holds ctrl_in(5)=0 and so FREEZES the LC generator
+    -- for the whole ROM load -- the 50 Hz interrupt then starts at the
+    -- very instant reset is released, a different phase from this
+    -- default. Pass "00000001" to reproduce the board exactly.
+    g_ctrl_reset : STD_LOGIC_VECTOR(7 DOWNTO 0) := "01100001"
   );
 END tb_prcx18_lockstep;
 
@@ -43,7 +50,7 @@ ARCHITECTURE tb OF tb_prcx18_lockstep IS
   CONSTANT clk_period : TIME := 250 ns; -- 4 MHz, the real CDP1802 clock
 
   -- ctrl_in: bit0 reset, bit3..1 nEF, bit5 LC run, bit6 run, bit7 FIFO pop
-  CONSTANT c_ctrl_reset : STD_LOGIC_VECTOR(7 DOWNTO 0) := "01100001";
+  CONSTANT c_ctrl_reset : STD_LOGIC_VECTOR(7 DOWNTO 0) := g_ctrl_reset;
   CONSTANT c_ctrl_run   : STD_LOGIC_VECTOR(7 DOWNTO 0) := "01101000";
 
   SIGNAL clk        : STD_LOGIC := '0';

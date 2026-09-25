@@ -14,6 +14,13 @@
 
 set -euo pipefail
 
+# ctrl_in while reset is held. The default keeps the 50 Hz LC generator
+# running through reset. The board's loader writes 0x01 instead, freezing
+# LC for the whole ROM load so that it starts at the very instant reset is
+# released -- a different interrupt phase, and one the board has actually
+# failed to boot with. CTRL_RESET=00000001 reproduces that here.
+CTRL_RESET="${CTRL_RESET:-01100001}"
+
 if [ $# -ne 1 ]; then
   echo "usage: $0 <prcx18.bin>" >&2
   exit 1
@@ -69,7 +76,8 @@ SRCS=(
   ghdl -a "${GHDL_FLAGS[@]}" "${SRCS[@]}"
   ghdl -e "${GHDL_FLAGS[@]}" tb_prcx18_lockstep
   echo "=== simulating (about 10 minutes) ==="
-  ghdl -r "${GHDL_FLAGS[@]}" tb_prcx18_lockstep --ieee-asserts=disable 2>&1 | grep -v "metavalue" || true
+  ghdl -r "${GHDL_FLAGS[@]}" tb_prcx18_lockstep -gg_ctrl_reset="$CTRL_RESET" \
+       --ieee-asserts=disable 2>&1 | grep -v "metavalue" || true
 )
 
 echo "=== lockstep check ==="
