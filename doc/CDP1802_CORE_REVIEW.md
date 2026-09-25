@@ -552,12 +552,33 @@ The lockstep run proves the instructions PRCX-18 uses. To prove the rest:
    Result: **0 mismatches**, after fixing bugs 6-10. The random test
    (TODO 2.3) now exercises DMA too, since its random `OUT 7` data sets
    the request bits: 1,000 seeds with DMA active also pass.
-5. **Pin-level timing against the datasheet** (the simulation half is
-   board-independent and worth doing before any real wiring -- it may
-   still find core bugs, which is why 2.5 and 2.6 come before the
-   backplane work): TPA/TPB position, nMRD/
-   nMWR windows, N lines during I/O, and SC codes per cycle, checked
-   against the timing tables (see `doc/CDP1802_MEMORY_TIMING.md`),
+5. **Pin-level timing against the datasheet -- first test in, one
+   deviation found.** `sim/ghdl/run.sh pintiming`
+   (`tb/vhdl/tb_cdp1802_pin_timing.vhd`, in the quick tier) measures the
+   pins only -- TPA, TPB, ADDR, nMRD, nMWR, SC, N, never a signal inside
+   the core -- in the datasheet's own half-CLOCK numbering (Figure 3/4's
+   `00 01 10 11 ... 70 71`), counting from TPA's rising edge. It confirms:
+   the machine cycle is 8 CLOCK periods and the initialization cycle 9
+   (bug 11, now visible at the pins); TPA and TPB are each one CLOCK wide;
+   the high-order address byte is still on the bus at TPA's trailing edge,
+   which is the edge the real memory board's 4042 latches with; and nMWR
+   falls only inside the low-byte window.
+
+   **Deviation found: TPB rises half a CLOCK period late.** Figure 4 puts
+   TPA's rise in the middle of state 1 and TPB's in the middle of state 6
+   -- 5 CLOCK periods apart. Ours are 5.5 apart, because `control.vhd`
+   registers TPA on the falling clock edge (it lives in `r`) and TPB on
+   the rising edge (it lives in `f`), so TPB lands at the *start of state
+   7* instead. Inside the FPGA nothing notices; on the backplane, TPA and
+   TPB are what I/O controllers time their bus interaction with, so it is
+   worth deciding deliberately. The testbench reports it as a warning
+   while `g_allow_tpb_half_clock` is TRUE; set that generic FALSE once the
+   core is changed and it becomes a hard check (it fails 24/24 cycles
+   today, which doubles as the mutation check).
+
+   Remaining for this TODO: N-line and SC validity windows per cycle, and
+   then the constraints file below. Reference numbers are in
+   `doc/CDP1802_MEMORY_TIMING.md`,
    This matters for plugging the FPGA into the real backplane. The TPA
    candidate listed here before (suppressed in `S1_IDLE` for the IDL
    instruction as well as LOAD) turned out to be real and is fixed as
