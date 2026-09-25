@@ -219,6 +219,11 @@ BEGIN
     VARIABLE min_hi_hold  : INTEGER := 999; -- high address byte after TPA
     VARIABLE min_n_setup  : INTEGER := 999; -- N valid before TPB rises
     VARIABLE min_n_hold   : INTEGER := 999; -- N still valid after TPB falls
+    VARIABLE min_wr_width : INTEGER := 999; -- nMWR low, i.e. the write pulse
+    VARIABLE min_d_setup  : INTEGER := 999; -- CPU data valid before nMWR rises
+    VARIABLE min_d_hold   : INTEGER := 999; -- ... and still valid after
+    VARIABLE dout_first   : INTEGER := -1;
+    VARIABLE dout_last    : INTEGER := -1;
 
     PROCEDURE check(what : STRING; got : INTEGER; want : INTEGER) IS
       VARIABLE ll : LINE;
@@ -327,6 +332,18 @@ BEGIN
              AND n_last - tpb_fall < min_n_hold THEN
             min_n_hold := n_last - tpb_fall;
           END IF;
+          IF mwr_low >= 0 AND mwr_high > mwr_low
+             AND mwr_high - mwr_low < min_wr_width THEN
+            min_wr_width := mwr_high - mwr_low;
+          END IF;
+          IF mwr_high > 0 AND dout_first >= 0 AND dout_first <= mwr_high
+             AND mwr_high - dout_first < min_d_setup THEN
+            min_d_setup := mwr_high - dout_first;
+          END IF;
+          IF mwr_high > 0 AND dout_last >= mwr_high
+             AND dout_last - mwr_high < min_d_hold THEN
+            min_d_hold := dout_last - mwr_high;
+          END IF;
           IF g_verbose THEN
             WRITE(l, STRING'("cycle "));  WRITE(l, cycles);
             WRITE(l, STRING'(" SC="));    WRITE(l, to_bitvector(sc));
@@ -351,6 +368,7 @@ BEGIN
         sc_at_start := sc; sc_moved := FALSE; n_nonzero := FALSE;
         n_carried := n_carry_next; n_carry_next := FALSE;
         n_first := -1; n_last := -1;
+        dout_first := -1; dout_last := -1;
       END IF;
 
       IF phase >= 0 THEN
@@ -367,6 +385,10 @@ BEGIN
           END IF;
           IF n_first < 0 THEN n_first := phase; END IF;
           n_last := phase;
+        END IF;
+        IF cpu_doe = '1' THEN
+          IF dout_first < 0 THEN dout_first := phase; END IF;
+          dout_last := phase;
         END IF;
         IF nmrd = '0' AND mrd_prev = '1' AND mrd_low < 0 THEN mrd_low := phase; END IF;
         IF nmwr = '0' AND mwr_prev = '1' AND mwr_low < 0 THEN mwr_low := phase; END IF;
@@ -389,6 +411,20 @@ BEGIN
     WRITE(l, c_hi_addr_hold_min);
     WRITE(l, STRING'(")"));
     WRITELINE(OUTPUT, l);
+    IF min_wr_width < 999 THEN
+      WRITE(l, STRING'("  nMWR write pulse width          : "));
+      WRITE(l, min_wr_width * (clk_period / 2));
+      WRITELINE(OUTPUT, l);
+      WRITE(l, STRING'("  CPU data valid before nMWR rises: "));
+      WRITE(l, min_d_setup * (clk_period / 2));
+      WRITELINE(OUTPUT, l);
+      WRITE(l, STRING'("  CPU data still valid after it   : "));
+      WRITE(l, min_d_hold * (clk_period / 2));
+      WRITE(l, STRING'("  (datasheet guarantees T-200 = "));
+      WRITE(l, clk_period - 200 ns);
+      WRITE(l, STRING'(")"));
+      WRITELINE(OUTPUT, l);
+    END IF;
     IF min_n_setup < 999 THEN
       WRITE(l, STRING'("  N valid before TPB rises        : "));
       WRITE(l, min_n_setup * (clk_period / 2));
