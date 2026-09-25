@@ -564,6 +564,37 @@ The lockstep run proves the instructions PRCX-18 uses. To prove the rest:
    bug 12; the remaining work is the pulse positions and widths
    themselves, which on the DE0-Nano module also have to account for the
    level translators' delays (TODO 6).
+
+   **Deliverable: a strict output-timing constraints file** (user,
+   2026-09-25). Inside an FPGA the surrounding chips are RTL and the tool
+   times them for us -- once the CDP1854 and the CD4076 are real parts on
+   the backplane, nothing does. Every output the backplane samples needs
+   a real constraint against those parts' own setup/hold: TPA, TPB,
+   nMRD, nMWR, the data bus, the multiplexed address bus, the N lines
+   and Q. `.xdc` for the Cora (Vivado), `.sdc` for the DE0-Nano
+   (Quartus, Cyclone IV) -- the same Synopsys language and largely the
+   same content, plus the level translators' delay (MOSFET for the
+   single-direction signals, TXS0108E for the bidirectional ones) in the
+   budget. This is the same class of defect as the untimed internal
+   clocks fixed on 2026-09-25 (TODO 4), one step further out: there, 43
+   register pins had no constraint and the boot was a per-build lottery.
+
+   Three more datasheet facts to check the core against while doing
+   this, taken verbatim from the PDF on 2026-09-25:
+   - **I/O request sampling window:** "These inputs [INTERRUPT, DMA-IN,
+     DMA-OUT] are sampled by the CPU during the interval between the
+     leading edge of TPB and the leading edge of TPA." `control.vhd`
+     samples them at `clk_cnt = 7`; confirm that lands inside that
+     window, and that nothing outside it can be seen.
+   - **What the initialization cycle resets:** "During this cycle the
+     CPU remains in S1 and register X, P, and R(0) are reset." Ours
+     resets them while reset is *held* (`S1_RESET` asserts `rst`), not
+     during the initialization cycle itself. Same end state before the
+     first fetch, but not the same on the pins if anything watches.
+   - **TPA's active edge:** "The trailing edge of TPA is used by the
+     memory system to latch the higher-order byte." Since 2026-09-25
+     `cs1800.vhd` samples on the CLOCK edge at the end of the TPA pulse,
+     which is that trailing edge -- it used to use the leading one.
 6. **Reset/WAIT/CLEAR modes -- done, all PASS.** `sim/ghdl/run.sh modes`
    (`tb/vhdl/tb_cdp1802_modes.vhd`), in the quick tier. LOAD, RESET, PAUSE
    and RUN are now exercised, including loading a program by DMA with no
