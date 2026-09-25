@@ -93,6 +93,16 @@ ARCHITECTURE tb OF tb_cdp1802_pin_timing IS
   CONSTANT c_tpb_width   : NATURAL := 2;  -- 1 CLOCK period
   CONSTANT c_cycle_len   : NATURAL := 16; -- 8 CLOCK periods
 
+  -- What the real chip GUARANTEES to the memory system, from the
+  -- datasheet's "Timing Specifications as a function of T", at
+  -- Vcc = Vdd = 5V. These are the numbers the real CS1800's memory cards
+  -- and CDP1854 were designed against, so our core has to be at least as
+  -- good or a real backplane will not work. T is one CLOCK period.
+  --   High-order address byte, hold after TPA:  T/2 - 25 ns
+  --   CPU data to bus, hold after WR:           T - 200 ns
+  --   Low-order address byte, hold after WR:    T - 30 ns
+  CONSTANT c_hi_addr_hold_min : TIME := clk_period / 2 - 25 ns;
+
   TYPE t_mem IS ARRAY (0 TO 255) OF STD_LOGIC_VECTOR(7 DOWNTO 0);
 
   -- 0000: F8 10  LDI 0x10      0005: 51     STR R1   -- a memory write
@@ -205,6 +215,10 @@ BEGIN
     VARIABLE n_carry_next : BOOLEAN := FALSE;
     VARIABLE l            : LINE;
     VARIABLE err          : NATURAL := 0;
+    -- Worst case over the whole run, in phases (1 phase = half a CLOCK).
+    VARIABLE min_hi_hold  : INTEGER := 999; -- high address byte after TPA
+    VARIABLE min_n_setup  : INTEGER := 999; -- N valid before TPB rises
+    VARIABLE min_n_hold   : INTEGER := 999; -- N still valid after TPB falls
 
     PROCEDURE check(what : STRING; got : INTEGER; want : INTEGER) IS
       VARIABLE ll : LINE;
@@ -301,6 +315,18 @@ BEGIN
             WRITELINE(OUTPUT, l);
             err := err + 1;
           END IF;
+          IF addr_change >= 0 AND tpa_fall >= 0
+             AND addr_change - tpa_fall < min_hi_hold THEN
+            min_hi_hold := addr_change - tpa_fall;
+          END IF;
+          IF n_first >= 0 AND tpb_rise >= 0 AND n_first <= tpb_rise
+             AND tpb_rise - n_first < min_n_setup THEN
+            min_n_setup := tpb_rise - n_first;
+          END IF;
+          IF n_last >= 0 AND tpb_fall >= 0 AND n_last >= tpb_fall
+             AND n_last - tpb_fall < min_n_hold THEN
+            min_n_hold := n_last - tpb_fall;
+          END IF;
           IF g_verbose THEN
             WRITE(l, STRING'("cycle "));  WRITE(l, cycles);
             WRITE(l, STRING'(" SC="));    WRITE(l, to_bitvector(sc));
@@ -350,6 +376,37 @@ BEGIN
       tpa_prev := tpa; tpb_prev := tpb;
       mrd_prev := nmrd; mwr_prev := nmwr; addr_prev := addr;
     END LOOP;
+
+    -- The margins a real memory card or CDP1854 actually sees. One phase
+    -- is half a CLOCK period; at 4 MHz that is 125 ns.
+    WRITE(l, STRING'("margins at T = "));
+    WRITE(l, clk_period);
+    WRITE(l, STRING'(":"));
+    WRITELINE(OUTPUT, l);
+    WRITE(l, STRING'("  high address byte held after TPA : "));
+    WRITE(l, min_hi_hold * (clk_period / 2));
+    WRITE(l, STRING'("  (datasheet guarantees T/2-25 = "));
+    WRITE(l, c_hi_addr_hold_min);
+    WRITE(l, STRING'(")"));
+    WRITELINE(OUTPUT, l);
+    IF min_n_setup < 999 THEN
+      WRITE(l, STRING'("  N valid before TPB rises        : "));
+      WRITE(l, min_n_setup * (clk_period / 2));
+      WRITELINE(OUTPUT, l);
+      WRITE(l, STRING'("  N still valid after TPB falls   : "));
+      WRITE(l, min_n_hold * (clk_period / 2));
+      WRITELINE(OUTPUT, l);
+    END IF;
+    -- The one hard check here: a real memory board latches the high
+    -- address byte on TPA's trailing edge, so falling short of the
+    -- datasheet's own guarantee would break real hardware.
+    IF min_hi_hold < 999
+       AND min_hi_hold * (clk_period / 2) < c_hi_addr_hold_min THEN
+      WRITE(l, STRING'("FAIL: high address byte hold after TPA is below "));
+      WRITE(l, STRING'("the datasheet's guaranteed minimum"));
+      WRITELINE(OUTPUT, l);
+      err := err + 1;
+    END IF;
 
     errors <= err;
     IF err = 0 THEN

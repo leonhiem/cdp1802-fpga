@@ -599,8 +599,36 @@ The lockstep run proves the instructions PRCX-18 uses. To prove the rest:
    and the header now warns about it.
 
    SC is checked as "all states are valid at TPA" (datasheet, SC0/SC1 pin
-   description) and passes. Remaining for this TODO: the constraints file
-   below. Reference numbers are in
+   description) and passes.
+
+   **But the margins are fine, which is the number that decides it.** The
+   test now also measures what a real memory card or CDP1854 actually
+   gets, against what the real chip *guarantees* it (datasheet "Timing
+   Specifications as a function of T", at 5V, T = 250 ns for 4 MHz):
+
+   | margin | ours | the real chip guarantees |
+   |---|---|---|
+   | high address byte held after TPA | 250 ns | T/2-25 = 100 ns |
+   | N valid before TPB rises | 1375 ns | (peripheral's own requirement) |
+   | N still valid after TPB falls | 125 ns | (peripheral's own requirement) |
+
+   The high-order address byte -- the one a real memory board latches on
+   TPA's trailing edge -- gets 2.5x the hold the datasheet promises, and
+   that is now a hard check, not a warning: falling below it would break
+   real hardware. The reason the half-clock skew costs nothing is that
+   TPB and N are late *together*, since both come from `instr.vhd`'s
+   rising-edge registers, so their relationship -- which is what a device
+   latching on TPB actually samples -- is unchanged. What moves is their
+   position relative to TPA and the machine cycle.
+
+   So re-aligning the core is a fidelity question, not a "will the
+   backplane work" question. The residual risk of leaving it is narrow: a
+   device that times off the TPA-to-TPB spacing itself, or one that
+   decodes N without gating it on TPB and so sees the half-clock tail at
+   the start of the next cycle. Neither applies to the CDP1854 or the
+   CD4076 on the real SIO board, which latch at TPB.
+
+   Remaining for this TODO: the constraints file below. Reference numbers are in
    `doc/CDP1802_MEMORY_TIMING.md`,
    This matters for plugging the FPGA into the real backplane. The TPA
    candidate listed here before (suppressed in `S1_IDLE` for the IDL
