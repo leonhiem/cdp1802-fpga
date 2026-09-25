@@ -1,0 +1,16 @@
+RAM / ROM:
+                                                                           | RAM1: FCB61C65L-70 | RAM2: LC3664BL-10 | ROM: 2764
+---------------------------------------------------------------------------+--------------------+-------------------+-------------
+minimal write pulse width: t_WP, t_WC, t_WLWH                              | t_WP min 35 ns     | t_WP min 60 ns    |  -
+Data setup before end of write: t_DW, t_DS, t_DVWH                         | t_DW min 30 ns     | t_DS min 35 ns    |  -
+Data hold after end of write: t_DH, t_WHDX                                 | t_DH min 5 ns      | t_DH min 0 ns     |  -
+Address setup before write start: t_AS, t_AVWL                             | t_AS min 0 ns      | t_AS min 0 ns     |  -
+Address hold after write ends: t_AH, t_WR, t_WHAX                          | t_WR min 0 ns      | t_WR min 0 ns     |  -
+Address access time (address valid → data valid): t_AA, t_ACC, t_AVQV      | t_AA max 70ms      | t_AA max 100 ns   | t_ACC max 250 ns
+Output-enable access time (nMRD low → data valid):  t_OE, t_GLQV           | t_OE max 35 ns     | t_OA max 50 ns    | t_OE max 150 ns
+Output disable / float time (nMRD high → outputs off): t_DF, t_OHZ, t_GHQZ | t_OHZ max 30 ns    | t_OOD max 30 ns   | t_DF max 130 ns
+Chip-enable access time: t_CE, t_ELQV                                      | t_ACE max 70 ns    | t_CA1 max 100 ns  | t_CE max 450 ns
+
+CDP1854:
+------------------------------------------------------------------+---------------------------
+CS / RSEL / data:  stay valid after TPB: t_H, t_HD, t_su/t_h pair | t_TRS min 50 ns, max 75 ns

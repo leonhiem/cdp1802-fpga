@@ -628,6 +628,56 @@ The lockstep run proves the instructions PRCX-18 uses. To prove the rest:
    the start of the next cycle. Neither applies to the CDP1854 or the
    CD4076 on the real SIO board, which latch at TPB.
 
+   **Third finding, and the one that actually blocks the backplane: the
+   read window is 125 ns, not 875 ns.** Found 2026-09-25/26 with
+   `tb/vhdl/tb_cdp1802_mux_addr.vhd` (`sim/ghdl/run.sh muxaddr`), the first
+   testbench in this project whose memory is a *real* CS1800 card: no
+   `A_full`, just the 8-bit multiplexed ADDR bus and a 4042 latch clocked
+   by TPA's trailing edge, with the part's access time as a generic.
+
+   Five instructions -- `LDN`, `LDX`, `OR`, `AND`, `XOR` -- assert `wr_D`
+   at `clk_cnt = 2`; the other 21 use `clk_cnt = 4`. The card cannot start
+   its access until the LOW address byte appears, and `addr_lohi` holds the
+   HIGH byte through `clk_cnt = 2`, so the low byte arrives at `clk_cnt =
+   3`. Those five then capture D half a clock later:
+
+       clk_cnt   0      1      2      3      4      5      6      7
+       ADDR   |--- HIGH byte ---|------------ LOW byte ------------|
+       TPA          ~~|_|                     (latches the HIGH byte)
+                               ^         ^
+                               |         +- the 21 slow instructions capture
+                               +- the card's address is COMPLETE here
+                               ^
+                               +- the 5 fast ones capture 125 ns after it
+
+   Measured threshold, sharp: 120 ns passes, 125 ns fails -- exactly half a
+   CLOCK period. The real chip gives memory `5T-375 = 875 ns` (datasheet
+   `t_ACC`), so we are ~7x stricter than the part we are replacing. This is
+   not a slow-part problem: no EPROM of any speed grade fits 125 ns.
+
+   Against the user's own parts (timings.txt), allowing ~4.4 ns each way
+   through an SN74LVC8T245:
+
+   | part | needs | fits 125 ns? |
+   |---|---|---|
+   | FCB61C65L-70 RAM | 70 ns | yes, 46 ns spare |
+   | LC3664BL-10 RAM | 100 ns | yes, but only 16 ns spare |
+   | 2764 EPROM | 250 ns (`t_ACC`), 450 (`t_CE`) | **no** |
+
+   So the real rack's RAM would work and its ROM would not -- and PRCX-18
+   certainly runs `LDX`/`OR`/`AND`/`XOR` against ROM-resident data. The
+   candidate fix is narrow: move those five sample points to `clk_cnt = 4`,
+   where the other 21 already are, which opens the window to 2.5T = 625 ns.
+   Not yet done -- the user wants to decide deliberately (2026-09-26), and
+   it is worth settling first whether to match the real chip's ~5T rather
+   than our own 4.
+
+   Note this is invisible on the Cora by construction:
+   `cs1800_prcx18_memory.vhd` is fed `A_full`, the core's own settled
+   16-bit address, which its header says is deliberate. Only a
+   multiplexed-address card exposes it, which is why this testbench had to
+   exist before any backplane wiring.
+
    Remaining for this TODO: the constraints file below. Reference numbers are in
    `doc/CDP1802_MEMORY_TIMING.md`,
    This matters for plugging the FPGA into the real backplane. The TPA
@@ -840,6 +890,21 @@ backplane, instead of the Cora's internal memory/UART models:
   CDP1854/memory cards); the Zynq I/O is 3.3 V. Needs level shifters,
   bidirectional ones with a direction control for the data bus
   (`DATA_OE`), and open-drain handling for `nINT` (and `nDMA`).
+  **Decided 2026-09-26 (user): 4x SN74LVC8T245**, replacing the earlier
+  TXS0108E + MOSFET plan. Better choice: the '8T245 is a buffered
+  translator with push-pull outputs and a specified propagation delay of a
+  few ns, where the TXS0108E is built for lightly loaded auto-direction
+  lines, drives a loaded 5 V bus weakly and specifies data rate rather
+  than a clean tPD. That directly helps the tightest margin in the design
+  -- the CDP1854's 75 ns `t_TRS` hold against our 125 ns -- because the
+  remaining budget is skew between the TPB path and the data/N paths, and
+  '8T245s make that single-digit ns instead of tens.
+  Two consequences of one DIR pin per 8 bits: signals must be grouped
+  strictly by direction (CPU outputs on one part, backplane inputs on
+  another, no mixing), and the data bus needs its own part with DIR driven
+  live from `DATA_OE` -- constrained so DIR settles before the CPU drives
+  and releases after, or it fights the memory's outputs. The ROM's
+  `t_DF` = 130 ns sets that turnaround requirement.
 - **Multiplexed address bus:** inside the FPGA the memory uses `A_full`.
   The real memory cards latch the high address byte from `ADDR` on TPA
   (4042 latches), so the core's 8-bit `ADDR` + TPA timing must be

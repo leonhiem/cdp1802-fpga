@@ -28,6 +28,9 @@
 #       pintiming                pin-level timing against datasheet
 #                                Figure 4: TPA/TPB position and width, the
 #                                address-byte handoff, MRD/MWR (TODO 2.5)
+#       muxaddr                  the core against a REAL memory card: the
+#                                multiplexed ADDR bus + a 4042 latched by
+#                                TPA, no A_full (TODO 2.5/6)
 #       board                    the Cora board's own sims, incl. the
 #                                memory map over all 64K addresses
 #       isa                      every opcode, every register, both ways
@@ -151,7 +154,7 @@ run_check() {
 # The quick tier samples the ALU's operand space and runs a few random
 # seeds; "full" runs both to completion. Override either directly with
 # STRIDE=... / SEEDS=... on any invocation.
-QUICK=(cdp18 cs1800 memory console modes pintiming cdp18_sync board isa dma alu random)
+QUICK=(cdp18 cs1800 memory console modes pintiming muxaddr cdp18_sync board isa dma alu random)
 
 # Runs one of the other test scripts: full output to a log, only its
 # verdict on the console (and the tail of the log if it fails).
@@ -191,6 +194,7 @@ for t in "${TARGETS[@]}"; do
     memory)   run_check tb_cs1800_memory  "$TB/tb_cs1800_memory.vhd" ;;
     modes)    run_check tb_cdp1802_modes  "$TB/tb_cdp1802_modes.vhd" ;;
     pintiming) run_check tb_cdp1802_pin_timing "$TB/tb_cdp1802_pin_timing.vhd" ;;
+    muxaddr)  run_check tb_cdp1802_mux_addr "$TB/tb_cdp1802_mux_addr.vhd" ;;
     console)  run_check tb_cs1800_console "$TB/tb_cs1800_console.vhd" ;;
     cdp18_sync) run_and_diff tb_cdp18_sync_dump "$TB/tb_cdp18_sync_dump.vhd" \
                   tb_cdp18_sync_tpb.txt "$REF/tb_cdp18_tpb.txt" ;;
