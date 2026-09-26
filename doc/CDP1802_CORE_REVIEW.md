@@ -732,7 +732,27 @@ The lockstep run proves the instructions PRCX-18 uses. To prove the rest:
    multiplexed-address card exposes it, which is why this testbench had to
    exist before any backplane wiring.
 
-   Remaining for this TODO: the constraints file below. Reference numbers are in
+   **The budget closes.** Every path measured at the pins against the
+   user's own parts (2764-20, FCB61C65L-70, LC3664BL-10, CDP1854), with
+   the SN74LVC8T245 crossing at 4.4 ns (A->B) / 6.0 ns (B->A):
+
+   | path | ours | needs | margin |
+   |---|---|---|---|
+   | read window | 625 ns | 200 ns (`t_ACC`) | 425 ns |
+   | write pulse | 250 ns | 35 / 60 ns (`t_WP`) | ~200 ns |
+   | data setup / hold at write | 875 ns | 35 / 5 ns | huge |
+   | high address byte held after TPA | 250 ns | 100 ns | 150 ns |
+   | CDP1854 hold after TPB | 120.6 ns | 75 ns (`t_TRS`) | 45.6 ns |
+   | bus turnaround | 125 ns | 59.4 ns (`t_DF` + crossing) | 65.6 ns |
+
+   Remaining for this TODO: the constraints file below. Note it cannot be
+   written meaningfully yet -- on the Cora none of these signals reach a
+   pin (the memory and CDP1854 are RTL inside the FPGA, so there is no
+   output timing to constrain), and on the DE0-Nano the pin assignments do
+   not exist until the module is laid out. What *is* done is the hard part:
+   every number the file needs is measured rather than assumed, and the
+   table above is its whole input. Each `set_output_delay` becomes "what
+   the part requires" plus "what the crossing costs". Reference numbers are in
    `doc/CDP1802_MEMORY_TIMING.md`,
    This matters for plugging the FPGA into the real backplane. The TPA
    candidate listed here before (suppressed in `S1_IDLE` for the IDL
@@ -966,13 +986,14 @@ backplane, instead of the Cora's internal memory/UART models:
   it swaps direction without ever turning the driver off; `nOE` does, and
   at 6.8 ns (`nOE`->B) it can be placed precisely. It costs one pin per
   device and cannot be added after layout.
-  With the user's 2764 **-20** the margin is probably fine unaided
-  (`t_ACC` 200 ns, and `t_DF` for that grade is typically 55-60 ns against
-  our 125 ns) -- the alarming 130 ns came from a slower part's datasheet.
-  **Open: confirm the -20's actual `t_DF`.** The dead-time capability is
-  worth having either way, because it turns turnaround into a design
-  parameter rather than something we hope fits, and a second memory card
-  or a different part changes the number.
+  **Resolved for the current parts (user, 2026-09-26): the 2764-20's
+  `t_DF` is max 55 ns.** The ROM is off the bus by 4.4 + 55 = 59.4 ns
+  against our 125 ns, so turnaround has 65.6 ns of margin and needs no
+  dead time today. The alarming 130 ns came from a slower part's
+  datasheet. Route `nOE` anyway: it costs a pin now and cannot be added
+  later, it turns turnaround into a design parameter instead of something
+  we hope fits, and a second memory card or a different part changes the
+  number.
 - **Multiplexed address bus:** inside the FPGA the memory uses `A_full`.
   The real memory cards latch the high address byte from `ADDR` on TPA
   (4042 latches), so the core's 8-bit `ADDR` + TPA timing must be
