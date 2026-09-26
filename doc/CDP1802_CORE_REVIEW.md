@@ -691,6 +691,11 @@ The lockstep run proves the instructions PRCX-18 uses. To prove the rest:
    | LC3664BL-10 RAM | 100 ns | yes, but only 16 ns spare |
    | 2764 EPROM | 250 ns (`t_ACC`), 450 (`t_CE`) | **no** |
 
+   (The user's actual part is a 2764**-20**, `t_ACC` 200 ns -- so the
+   numbers above are from a slower datasheet and the real margin is
+   better still. It made no difference to the verdict: 200 ns does not
+   fit a 125 ns window either.)
+
    So the real rack's RAM would work and its ROM would not -- and PRCX-18
    certainly runs `LDX`/`OR`/`AND`/`XOR` against ROM-resident data.
 
@@ -951,9 +956,23 @@ backplane, instead of the Cora's internal memory/UART models:
   Two consequences of one DIR pin per 8 bits: signals must be grouped
   strictly by direction (CPU outputs on one part, backplane inputs on
   another, no mixing), and the data bus needs its own part with DIR driven
-  live from `DATA_OE` -- constrained so DIR settles before the CPU drives
-  and releases after, or it fights the memory's outputs. The ROM's
-  `t_DF` = 130 ns sets that turnaround requirement.
+  live from `DATA_OE`.
+- **Route every `nOE` back to the FPGA** (decided 2026-09-26, at minimum
+  the data-bus part). Bus turnaround is the tightest path in the whole
+  budget: the core stops reading and starts driving 125 ns later
+  (measured, `tb_cdp1802_pin_timing.vhd`), so a memory slow to let go is
+  still driving when the FPGA arrives -- two CMOS outputs on the 5 V side,
+  once per read-then-write turnaround. Flipping `DIR` does not help, since
+  it swaps direction without ever turning the driver off; `nOE` does, and
+  at 6.8 ns (`nOE`->B) it can be placed precisely. It costs one pin per
+  device and cannot be added after layout.
+  With the user's 2764 **-20** the margin is probably fine unaided
+  (`t_ACC` 200 ns, and `t_DF` for that grade is typically 55-60 ns against
+  our 125 ns) -- the alarming 130 ns came from a slower part's datasheet.
+  **Open: confirm the -20's actual `t_DF`.** The dead-time capability is
+  worth having either way, because it turns turnaround into a design
+  parameter rather than something we hope fits, and a second memory card
+  or a different part changes the number.
 - **Multiplexed address bus:** inside the FPGA the memory uses `A_full`.
   The real memory cards latch the high address byte from `ADDR` on TPA
   (4042 latches), so the core's 8-bit `ADDR` + TPA timing must be
