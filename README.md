@@ -553,7 +553,9 @@ tb/vhdl/               testbenches
 sim/ghdl/              GHDL simulation flow + committed golden reference trace
 sim/xsim/              Vivado xsim cross-check against that same golden trace
 boards/cora-z7-07s/    Zynq board bring-up: block design, RTL glue, hardware log
-doc/                   original design sketches and simulation screenshots
+doc/                   design notes, the core review (bugs + TODOs), the
+                       CDP1802 timing reference, and BACKPLANE_TIMING.md --
+                       the part-by-part data the DE0-Nano's .sdc needs
 ```
 
 ### `src/vhdl/`

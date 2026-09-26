@@ -745,7 +745,14 @@ The lockstep run proves the instructions PRCX-18 uses. To prove the rest:
    | CDP1854 hold after TPB | 120.6 ns | 75 ns (`t_TRS`) | 45.6 ns |
    | bus turnaround | 125 ns | 59.4 ns (`t_DF` + crossing) | 65.6 ns |
 
-   Remaining for this TODO: the constraints file below. Note it cannot be
+   **All of it is written up in `doc/BACKPLANE_TIMING.md`** -- every part
+   with its exact part number and parameters, what the core provides at
+   each pin, the margins, the signal grouping for the translators, and the
+   recipe for turning each row into a `set_output_delay`. That file is the
+   handover: when the DE0-Nano module is laid out and the pin assignments
+   exist, the `.sdc` follows from it without re-deriving anything.
+
+   Remaining for this TODO: the constraints file itself. Note it cannot be
    written meaningfully yet -- on the Cora none of these signals reach a
    pin (the memory and CDP1854 are RTL inside the FPGA, so there is no
    output timing to constrain), and on the DE0-Nano the pin assignments do
