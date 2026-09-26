@@ -598,6 +598,24 @@ The lockstep run proves the instructions PRCX-18 uses. To prove the rest:
    SC is checked as "all states are valid at TPA" (datasheet, SC0/SC1 pin
    description) and passes.
 
+   **nMRD and nMWR widths: different from the drawing, safe for the real
+   parts.** Checked 2026-09-26 after the user noted from MPM-201A p.86
+   that the strobes look too short. Measured, against Figures 6 and 7
+   rendered as images:
+
+   | strobe | datasheet | ours | the user's parts need |
+   |---|---|---|---|
+   | nMRD low | ~7/8 of the cycle, rising at the cycle end | up to the **whole** cycle -- wider, not shorter | `t_OE` 35 / 50 / 150 ns |
+   | nMWR low | ~2 CLOCK periods (500 ns), late in the execute cycle | **1 CLOCK period** (250 ns) | `t_WP` 35 / 60 ns |
+
+   So nMWR is half the drawn width and nMRD is wider than drawn. Neither
+   breaks anything: the write pulse still has 4x the widest `t_WP` among
+   the real RAMs, and a wider read strobe is the safe direction. The one
+   real risk from an MRD that never releases -- the memory still driving
+   the bus when the CPU starts to -- is now an explicit check
+   ("no bus contention: nMRD never low while the CPU drove the bus"), and
+   it passes: the core does deassert MRD before driving.
+
    **Margins.** The test also measures what a real memory card or CDP1854 actually
    gets, against what the real chip *guarantees* it (datasheet "Timing
    Specifications as a function of T", at 5V, T = 250 ns for 4 MHz):

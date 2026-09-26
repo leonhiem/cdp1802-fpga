@@ -223,6 +223,13 @@ BEGIN
     VARIABLE min_n_setup  : INTEGER := 999; -- N valid before TPB rises
     VARIABLE min_n_hold   : INTEGER := 999; -- N still valid after TPB falls
     VARIABLE min_wr_width : INTEGER := 999; -- nMWR low, i.e. the write pulse
+    VARIABLE mrd_phases   : INTEGER := 0;   -- phases nMRD was low this cycle
+    -- Bus contention: nMRD low means a real memory is driving the data bus
+    -- (MRD is its output enable), and DATA_OE high means the CPU is driving
+    -- it too. On the Cora nothing notices -- the memory is RTL and the
+    -- testbenches mux the bus -- but on the backplane that is two drivers.
+    VARIABLE contend      : INTEGER := 0;   -- phases both drove, this run
+    VARIABLE max_mrd_low  : INTEGER := 0;   -- ... the most seen in any cycle
     VARIABLE min_d_setup  : INTEGER := 999; -- CPU data valid before nMWR rises
     VARIABLE min_d_hold   : INTEGER := 999; -- ... and still valid after
     VARIABLE dout_first   : INTEGER := -1;
@@ -320,6 +327,7 @@ BEGIN
              AND n_last - tpb_fall < min_n_hold THEN
             min_n_hold := n_last - tpb_fall;
           END IF;
+          IF mrd_phases > max_mrd_low THEN max_mrd_low := mrd_phases; END IF;
           IF mwr_low >= 0 AND mwr_high > mwr_low
              AND mwr_high - mwr_low < min_wr_width THEN
             min_wr_width := mwr_high - mwr_low;
@@ -353,6 +361,7 @@ BEGIN
         tpa_fall := -1; tpb_rise := -1; tpb_fall := -1;
         addr_change := -1; mrd_low := -1; mwr_low := -1; mwr_high := -1;
         hi_byte := addr;
+        mrd_phases := 0;
         sc_at_start := sc; sc_moved := FALSE; n_nonzero := FALSE;
         n_bad_at_tpb := FALSE;
         n_first := -1; n_last := -1;
@@ -375,6 +384,8 @@ BEGIN
           IF dout_first < 0 THEN dout_first := phase; END IF;
           dout_last := phase;
         END IF;
+        IF nmrd = '0' THEN mrd_phases := mrd_phases + 1; END IF;
+        IF nmrd = '0' AND cpu_doe = '1' THEN contend := contend + 1; END IF;
         IF nmrd = '0' AND mrd_prev = '1' AND mrd_low < 0 THEN mrd_low := phase; END IF;
         IF nmwr = '0' AND mwr_prev = '1' AND mwr_low < 0 THEN mwr_low := phase; END IF;
         IF nmwr = '1' AND mwr_prev = '0' AND mwr_low >= 0 AND mwr_high < 0 THEN mwr_high := phase; END IF;
@@ -395,6 +406,23 @@ BEGIN
     WRITE(l, STRING'("  (datasheet guarantees T/2-25 = "));
     WRITE(l, c_hi_addr_hold_min);
     WRITE(l, STRING'(")"));
+    WRITELINE(OUTPUT, l);
+    IF contend > 0 THEN
+      WRITE(l, STRING'("  BUS CONTENTION: nMRD low while the CPU drove "));
+      WRITE(l, STRING'("the bus, for "));
+      WRITE(l, contend * (clk_period / 2));
+      WRITE(l, STRING'(" in this run"));
+      WRITELINE(OUTPUT, l);
+    ELSE
+      WRITE(l, STRING'("  no bus contention: nMRD never low while the "));
+      WRITE(l, STRING'("CPU drove the bus"));
+      WRITELINE(OUTPUT, l);
+    END IF;
+    WRITE(l, STRING'("  nMRD low, longest in any cycle   : "));
+    WRITE(l, max_mrd_low * (clk_period / 2));
+    WRITE(l, STRING'(" of a "));
+    WRITE(l, c_cycle_len * (clk_period / 2));
+    WRITE(l, STRING'(" cycle"));
     WRITELINE(OUTPUT, l);
     IF min_wr_width < 999 THEN
       WRITE(l, STRING'("  nMWR write pulse width          : "));
