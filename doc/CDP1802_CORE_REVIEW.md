@@ -658,9 +658,29 @@ The lockstep run proves the instructions PRCX-18 uses. To prove the rest:
                                +- the 5 fast ones capture 125 ns after it
 
    Measured threshold, sharp: 120 ns passes, 125 ns fails -- exactly half a
-   CLOCK period. The real chip gives memory `5T-375 = 875 ns` (datasheet
-   `t_ACC`), so we are ~7x stricter than the part we are replacing. This is
-   not a slow-part problem: no EPROM of any speed grade fits 125 ns.
+   CLOCK period.
+
+   **Corrected 2026-09-26, the first comparison here was wrong.** It said
+   "the real chip gives 875 ns, we are ~7x stricter". That compared the
+   datasheet's `t_ACC` (= `5T-375` = 875 ns), which is measured from the
+   start of the cycle when the HIGH byte appears, against our 125 ns,
+   measured from the COMPLETE address. Apples to oranges. Measuring
+   Figure 5 properly -- the machine-cycle row as the ruler, 8 clocks =
+   1206 px at 600 dpi, and the MA row's HIGH-to-LOW separator at x = 1320
+   against a cycle starting at x = 929 -- puts the real chip's address
+   handoff at **2.6 T**, where ours is at 3.0 T:
+
+   | | address complete | data required | window |
+   |---|---|---|---|
+   | real CDP1802 | 2.6 T | 3.5 T (`t_ACC`) | ~230 ns |
+   | ours, the five fast instructions | 3.0 T | 3.5 T | 125 ns |
+
+   So we are about **half a clock tighter than the original**, not seven
+   times. That also answers why the real rack works with the same EPROM:
+   it is a designed-to-just-fit system -- a 2764's 250 ns sits right at
+   the real chip's ~230 ns window -- and our core takes another 105 ns out
+   of an already tight budget. The measured threshold and the verdict per
+   part are unchanged; only the magnitude was overstated.
 
    Against the user's own parts (timings.txt), allowing ~4.4 ns each way
    through an SN74LVC8T245:
