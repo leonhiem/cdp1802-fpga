@@ -2,7 +2,7 @@
 --
 -- File Name: tb_cdp1802_pin_timing.vhd
 --
--- Title: pin-level timing of the CDP1802 core against datasheet Figure 4
+-- Title: pin-level timing of the CDP1802 core against the datasheet's timing waveforms
 --
 -- License: MIT
 --
@@ -33,7 +33,10 @@
 --   that; forgetting it makes a correct core look like it drives N a cycle
 --   early, which is exactly the false finding this note exists to prevent.
 --
---   What Figure 4 shows, and what this checks:
+--   What the datasheet's timing waveforms show, and what this checks
+--   (Figure 5, "General Timing Waveforms", verified by rendering the page
+--   as an image -- the PDF's text layer puts these columns nowhere useful,
+--   and reading it there produced two false "deviations" first):
 --     - TPA is one CLOCK period wide (rises in state 1, falls in state 2);
 --     - TPB is one CLOCK period wide (rises in state 6, falls in state 7);
 --     - TPA to TPB is 5 CLOCK periods, and a machine cycle is 8 (except the
@@ -60,26 +63,20 @@ ENTITY tb_cdp1802_pin_timing IS
   GENERIC (
     -- Report every measured cycle, not just the failures. Useful when
     -- characterising a change; noisy in the regression.
-    g_verbose : BOOLEAN := FALSE;
-    -- KNOWN DEVIATION, found by this test 2026-09-25, not yet decided:
-    -- our TPB rises half a CLOCK period later than Figure 4 puts it.
-    -- TPA is registered on the falling clock edge (it lives in control.vhd's
-    -- `r`) and TPB on the rising edge (it lives in `f`), so TPA rises in the
-    -- middle of state 1 as drawn, but TPB rises at the *start* of state 7
-    -- instead of the middle of state 6: 5.5 CLOCK periods after TPA where
-    -- the datasheet has 5. Everything else in Figure 4 matches.
-    -- TRUE reports it as a warning and keeps the regression green; set it
-    -- FALSE once the core is changed, and this becomes a hard check.
-    g_allow_tpb_half_clock : BOOLEAN := TRUE;
-    -- KNOWN DEVIATION, same root cause as the one above: the N lines stay
-    -- asserted half a CLOCK period past the end of the execute cycle, so
-    -- they are briefly non-zero at the very start of the next cycle. The
-    -- datasheet says "the N bits are low at all times except when an I/O
-    -- instruction is being executed". instr.vhd registers its outputs on
-    -- the rising clock edge while control.vhd changes state on the falling
-    -- one, which shifts both N and TPB half a clock late against the
-    -- machine cycle. TRUE reports it as a warning; FALSE makes it a check.
-    g_allow_n_half_clock : BOOLEAN := TRUE
+    g_verbose : BOOLEAN := FALSE
+    -- (There used to be a g_allow_tpb_half_clock here, for a "TPB rises
+    -- half a clock late" deviation. It was not a deviation: the expectation
+    -- had been read off the datasheet PDF's *text* layer, whose column
+    -- positions are meaningless. Rendering Figure 5 as an image, and the
+    -- 1976 User Manual MPM-201A p.86, both show TPA on falling clock edges
+    -- and TPB on rising ones -- 5.5 CLOCK periods apart, which is what the
+    -- core does. c_tpb_rise below is now that value and is a hard check.)
+    -- (A g_allow_n_half_clock lived here too, for "the N lines are half a
+    -- clock late". Same mistake as the TPB one: it measured N against a
+    -- machine-cycle boundary inferred from TPA, which is not where the
+    -- boundary is. The N check below now asks the question a real device
+    -- actually cares about -- is N right at the moment TPB latches it --
+    -- which needs no assumption about where the cycle starts.)
   );
 END tb_cdp1802_pin_timing;
 
@@ -89,7 +86,14 @@ ARCHITECTURE tb OF tb_cdp1802_pin_timing IS
 
   -- Expected phases, in half-CLOCK periods from TPA's rising edge.
   CONSTANT c_tpa_width   : NATURAL := 2;  -- 1 CLOCK period
-  CONSTANT c_tpb_rise    : NATURAL := 10; -- 5 CLOCK periods after TPA
+  -- 5.5 CLOCK periods after TPA, and that half is real, not a rounding:
+  -- TPA's edges fall on the clock's FALLING edges and TPB's on its RISING
+  -- edges. Figure 5 of the datasheet ("General Timing Waveforms", rendered
+  -- as an image -- the PDF's text layer puts these columns nowhere useful)
+  -- draws TPA rising at the falling edge of clock 1 and falling at the
+  -- falling edge of clock 2, and TPB rising on the rising edge of clock 7.
+  -- The 1976 User Manual MPM-201A p.86 says the same. Our core matches.
+  CONSTANT c_tpb_rise    : NATURAL := 11;
   CONSTANT c_tpb_width   : NATURAL := 2;  -- 1 CLOCK period
   CONSTANT c_cycle_len   : NATURAL := 16; -- 8 CLOCK periods
 
@@ -210,9 +214,8 @@ BEGIN
     VARIABLE n_nonzero    : BOOLEAN := FALSE; -- N left 000 somewhere in this cycle
     VARIABLE n_first      : INTEGER := -1;    -- ... first at this phase
     VARIABLE n_last       : INTEGER := -1;    -- ... and last at this one
-    -- N seen in phases 14/15, which belong to the NEXT machine cycle
-    VARIABLE n_carried    : BOOLEAN := FALSE;
-    VARIABLE n_carry_next : BOOLEAN := FALSE;
+    -- N was non-zero while TPB was high, in a cycle SC did not call execute
+    VARIABLE n_bad_at_tpb : BOOLEAN := FALSE;
     VARIABLE l            : LINE;
     VARIABLE err          : NATURAL := 0;
     -- Worst case over the whole run, in phases (1 phase = half a CLOCK).
@@ -235,7 +238,7 @@ BEGIN
         WRITE(ll, what);
         WRITE(ll, STRING'(" at phase "));
         WRITE(ll, got);
-        WRITE(ll, STRING'(", datasheet Figure 4 says "));
+        WRITE(ll, STRING'(", the datasheet's timing waveforms says "));
         WRITE(ll, want);
         WRITELINE(OUTPUT, ll);
         err := err + 1;
@@ -260,19 +263,7 @@ BEGIN
             check("machine cycle length", phase, c_cycle_len);
           END IF;
           check("TPA falling edge", tpa_fall, c_tpa_width);
-          IF tpb_rise = c_tpb_rise + 1 AND g_allow_tpb_half_clock THEN
-            IF cycles = 1 THEN -- say it once, not 20 times
-              WRITE(l, STRING'("WARNING: TPB rises at phase "));
-              WRITE(l, tpb_rise);
-              WRITE(l, STRING'(", datasheet Figure 4 says "));
-              WRITE(l, c_tpb_rise);
-              WRITE(l, STRING'(" -- half a CLOCK late, see this file's "));
-              WRITE(l, STRING'("g_allow_tpb_half_clock and TODO 2.5"));
-              WRITELINE(OUTPUT, l);
-            END IF;
-          ELSE
-            check("TPB rising edge", tpb_rise, c_tpb_rise);
-          END IF;
+          check("TPB rising edge", tpb_rise, c_tpb_rise);
           IF tpb_rise >= 0 AND tpb_fall >= 0 THEN
             check("TPB falling edge", tpb_fall - tpb_rise, c_tpb_width);
           END IF;
@@ -302,21 +293,18 @@ BEGIN
           -- "The N bits are low at all times except when an I/O
           -- instruction is being executed" -- so never outside an execute
           -- cycle (S1 = SC "01").
-          IF n_carried AND NOT n_nonzero AND sc_at_start /= "01"
-             AND g_allow_n_half_clock THEN
-            IF cycles = 13 THEN -- say it once
-              WRITE(l, STRING'("WARNING: the N lines stay asserted half a "));
-              WRITE(l, STRING'("CLOCK past the execute cycle, so they are "));
-              WRITE(l, STRING'("non-zero at the start of the next one -- see "));
-              WRITE(l, STRING'("g_allow_n_half_clock and TODO 2.5"));
-              WRITELINE(OUTPUT, l);
-            END IF;
-          ELSIF (n_nonzero OR n_carried) AND sc_at_start /= "01" THEN
+          -- "The N bits are low at all times except when an I/O
+          -- instruction is being executed" (datasheet, N0-N2 pin
+          -- description). Checked where it matters and where no
+          -- cycle-boundary assumption is needed: an I/O controller latches
+          -- on TPB, so at every instant TPB is high, N non-zero must mean
+          -- SC says execute. Both are read from the pins at the same
+          -- moment.
+          IF n_bad_at_tpb THEN
             WRITE(l, STRING'("FAIL: cycle "));
             WRITE(l, cycles);
-            WRITE(l, STRING'(": N lines left 000 in a non-execute cycle (SC="));
-            WRITE(l, to_bitvector(sc_at_start));
-            WRITE(l, STRING'(")"));
+            WRITE(l, STRING'(": N lines non-zero while TPB was high in a "));
+            WRITE(l, STRING'("non-execute cycle"));
             WRITELINE(OUTPUT, l);
             err := err + 1;
           END IF;
@@ -366,7 +354,7 @@ BEGIN
         addr_change := -1; mrd_low := -1; mwr_low := -1; mwr_high := -1;
         hi_byte := addr;
         sc_at_start := sc; sc_moved := FALSE; n_nonzero := FALSE;
-        n_carried := n_carry_next; n_carry_next := FALSE;
+        n_bad_at_tpb := FALSE;
         n_first := -1; n_last := -1;
         dout_first := -1; dout_last := -1;
       END IF;
@@ -378,13 +366,10 @@ BEGIN
         IF addr /= hi_byte AND addr_change < 0 THEN addr_change := phase; END IF;
         IF sc /= sc_at_start AND (tpa_fall < 0 OR phase <= tpa_fall) THEN sc_moved := TRUE; END IF;
         IF n /= "000" THEN
-          IF phase >= c_cycle_len - 2 THEN
-            n_carry_next := TRUE; -- belongs to the next cycle, see the header
-          ELSE
-            n_nonzero := TRUE;
-          END IF;
+          n_nonzero := TRUE;
           IF n_first < 0 THEN n_first := phase; END IF;
           n_last := phase;
+          IF tpb = '1' AND sc /= "01" THEN n_bad_at_tpb := TRUE; END IF;
         END IF;
         IF cpu_doe = '1' THEN
           IF dout_first < 0 THEN dout_first := phase; END IF;
@@ -446,7 +431,7 @@ BEGIN
 
     errors <= err;
     IF err = 0 THEN
-      WRITE(l, STRING'("PASS: pin timing matches datasheet Figure 4 over "));
+      WRITE(l, STRING'("PASS: pin timing matches the datasheet's timing waveforms over "));
       WRITE(l, cycles);
       WRITE(l, STRING'(" machine cycles"));
     ELSE
@@ -460,7 +445,7 @@ BEGIN
     -- sim/ghdl/run.sh's run_check reports PASS unless the simulation stops,
     -- so failing has to be an assertion, not just a printed line.
     ASSERT err = 0
-      REPORT "pin timing deviates from datasheet Figure 4 -- see the FAIL lines above"
+      REPORT "pin timing deviates from the datasheet's timing waveforms -- see the FAIL lines above"
       SEVERITY FAILURE;
     WAIT;
   END PROCESS;

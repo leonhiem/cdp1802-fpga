@@ -564,45 +564,41 @@ The lockstep run proves the instructions PRCX-18 uses. To prove the rest:
    which is the edge the real memory board's 4042 latches with; and nMWR
    falls only inside the low-byte window.
 
-   **Deviation found: TPB rises half a CLOCK period late.** Figure 4 puts
-   TPA's rise in the middle of state 1 and TPB's in the middle of state 6
-   -- 5 CLOCK periods apart. Ours are 5.5 apart, because `control.vhd`
-   registers TPA on the falling clock edge (it lives in `r`) and TPB on
-   the rising edge (it lives in `f`), so TPB lands at the *start of state
-   7* instead. Inside the FPGA nothing notices; on the backplane, TPA and
-   TPB are what I/O controllers time their bus interaction with, so it is
-   worth deciding deliberately. The testbench reports it as a warning
-   while `g_allow_tpb_half_clock` is TRUE; set that generic FALSE once the
-   core is changed and it becomes a hard check (it fails 24/24 cycles
-   today, which doubles as the mutation check).
+   **TPA/TPB positions: correct, and a retracted false alarm.** This test
+   first reported "TPB rises half a CLOCK period late". That was wrong.
+   The expectation had been taken from the datasheet PDF's *text* layer,
+   where the waveform columns carry no positional meaning. Rendering
+   Figure 5 ("General Timing Waveforms") as an image settles it, and the
+   user checked the 1976 User Manual MPM-201A p.86 independently: **TPA's
+   edges sit on the clock's FALLING edges and TPB's on its RISING edges**
+   -- TPA rises at the falling edge of clock 1 and falls at the falling
+   edge of clock 2; TPB rises on the rising edge of clock 7. That puts
+   them 5.5 CLOCK periods apart by design, which is exactly what the core
+   produces. `c_tpb_rise` is now 11 half-phases and is a hard check.
 
-   **Second deviation, same root cause: the N lines are half a CLOCK late
-   too.** The datasheet says "the N bits are low at all times except when
-   an I/O instruction is being executed"; ours come up half a clock after
-   the execute cycle starts and stay half a clock past its end, so they
-   are briefly non-zero at the start of the next cycle. Both this and the
-   TPB position come from the same asymmetry: `instr.vhd` registers its
-   outputs on the *rising* clock edge while `control.vhd` changes state on
-   the *falling* one, so everything instr.vhd drives sits half a clock
-   late against the machine cycle. Warned under `g_allow_n_half_clock`.
+   Lesson recorded in the testbench header: render the page, do not read
+   waveform positions out of a PDF text dump.
 
-   A deliberate decision is needed on whether to re-align them, and it
-   should be taken once for both, since one change fixes both. Inside the
-   FPGA nothing notices; on the backplane TPA and TPB are what I/O
-   controllers time the data bus against.
+   **The N lines: also correct, also a retracted false alarm.** The
+   second reported deviation ("N stays asserted half a CLOCK past the
+   execute cycle") was the same mistake in a different dress: it measured
+   N against a machine-cycle boundary inferred from TPA, and TPA is not
+   where the boundary is. The check now asks what a real device actually
+   depends on, with no cycle-boundary assumption at all: an I/O controller
+   latches on TPB, so at every instant TPB is high, N non-zero must mean
+   SC says execute. Both pins are read at the same moment. It passes.
 
-   **Measurement note worth keeping:** TPA is the only clean pin-level
-   anchor, but the machine cycle does not start there -- state 0 begins
-   two phases earlier, where SC changes. Attributing those two phases to
-   the wrong cycle makes a correct core look like it drives N a whole
-   cycle early; that false finding happened once while writing this test
-   and the header now warns about it.
+   **So no re-timing of the core is needed for TPA, TPB or N.** Two of
+   the three "deviations" this test reported were artifacts of how the
+   expectation was derived, not of the core -- both caught by going back
+   to the primary source rather than by arguing. The third one (the read
+   window, below) is real and was found a different way: by building the
+   memory card instead of reading a drawing.
 
    SC is checked as "all states are valid at TPA" (datasheet, SC0/SC1 pin
    description) and passes.
 
-   **But the margins are fine, which is the number that decides it.** The
-   test now also measures what a real memory card or CDP1854 actually
+   **Margins.** The test also measures what a real memory card or CDP1854 actually
    gets, against what the real chip *guarantees* it (datasheet "Timing
    Specifications as a function of T", at 5V, T = 250 ns for 4 MHz):
 
@@ -614,19 +610,12 @@ The lockstep run proves the instructions PRCX-18 uses. To prove the rest:
 
    The high-order address byte -- the one a real memory board latches on
    TPA's trailing edge -- gets 2.5x the hold the datasheet promises, and
-   that is now a hard check, not a warning: falling below it would break
-   real hardware. The reason the half-clock skew costs nothing is that
-   TPB and N are late *together*, since both come from `instr.vhd`'s
-   rising-edge registers, so their relationship -- which is what a device
-   latching on TPB actually samples -- is unchanged. What moves is their
-   position relative to TPA and the machine cycle.
-
-   So re-aligning the core is a fidelity question, not a "will the
-   backplane work" question. The residual risk of leaving it is narrow: a
-   device that times off the TPA-to-TPB spacing itself, or one that
-   decodes N without gating it on TPB and so sees the half-clock tail at
-   the start of the next cycle. Neither applies to the CDP1854 or the
-   CD4076 on the real SIO board, which latch at TPB.
+   that is a hard check: falling below it would break real hardware. The
+   CDP1854's own requirement is `t_TRS` = 75 ns of hold (user's datasheet,
+   timings.txt) against our 125 ns, which is the tightest margin in the
+   design; the remaining 50 ns is the budget for skew between the TPB path
+   and the data/N paths through the level converters, and is why the move
+   to SN74LVC8T245 (TODO 6) matters.
 
    **Third finding, and the one that actually blocks the backplane: the
    read window is 125 ns, not 875 ns.** Found 2026-09-25/26 with
