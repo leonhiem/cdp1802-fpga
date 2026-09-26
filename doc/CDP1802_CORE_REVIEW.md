@@ -692,12 +692,34 @@ The lockstep run proves the instructions PRCX-18 uses. To prove the rest:
    | 2764 EPROM | 250 ns (`t_ACC`), 450 (`t_CE`) | **no** |
 
    So the real rack's RAM would work and its ROM would not -- and PRCX-18
-   certainly runs `LDX`/`OR`/`AND`/`XOR` against ROM-resident data. The
-   candidate fix is narrow: move those five sample points to `clk_cnt = 4`,
-   where the other 21 already are, which opens the window to 2.5T = 625 ns.
-   Not yet done -- the user wants to decide deliberately (2026-09-26), and
-   it is worth settling first whether to match the real chip's ~5T rather
-   than our own 4.
+   certainly runs `LDX`/`OR`/`AND`/`XOR` against ROM-resident data.
+
+   **FIXED 2026-09-26.** The user chose the safe option over the faithful
+   one: those five `wr_D` sample points moved from `clk_cnt = 2` to
+   `clk_cnt = 4`, where the other 21 memory reads already were, so all 26
+   now sample at the same step. That opens the window to 2.5T = 625 ns --
+   not merely restoring the real chip's ~230 ns but nearly tripling it.
+   The alternative (also moving the address handoff to 2.6T to reproduce
+   the original exactly) was rejected: it needs half-clock granularity and
+   would keep the tight fit for no benefit.
+
+   Verified, all four:
+
+   | check | before | after |
+   |---|---|---|
+   | `muxaddr` threshold | 120 ns pass / 125 fail | **600 ns pass / 625 fail** |
+   | `sim/ghdl/run.sh` | 13 targets | 13 targets, PASS |
+   | PRCX-18 real-ROM lockstep | PASS | PASS, 0 mismatches, full `DMP` |
+   | Cora, 5 boots | 5/5 | **5/5** |
+
+   Margins against the user's own parts afterwards: 2764 `t_ACC` 250 ns
+   has 375 ns spare and `t_CE` 450 ns has 175 ns; the RAMs went from
+   16-46 ns of margin to over 500.
+
+   Note the board can only prove *no harm* here, not that the fix works:
+   the Cora's memory is fed `A_full`, so it never had the problem. The
+   proof the fix works is the threshold measurement, and the real proof
+   will be the backplane.
 
    Note this is invisible on the Cora by construction:
    `cs1800_prcx18_memory.vhd` is fed `A_full`, the core's own settled

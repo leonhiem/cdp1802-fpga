@@ -2718,3 +2718,32 @@ by the VHDL changes? changes in control.vhd are fundamental") is what
 forced the repeats that produced the table above. Run `boot_test.sh` at
 least five times per bitstream, and read the timing report's
 `check_no_clock` section before trusting "timing met".
+
+## 2026-09-26: the read-window fix on the board, and a bitstream deleted underneath a test
+
+The TODO 2.5 read-window fix (five `wr_D` sample points moved from
+`clk_cnt = 2` to `4`, see doc/CDP1802_CORE_REVIEW.md) is verified: **5
+boots out of 5**, plus the real-ROM lockstep with 0 mismatches and the
+full `DMP`, plus all 13 targets of `sim/ghdl/run.sh`. The `muxaddr`
+threshold moved from 125 ns to 625 ns, which is what the change was for.
+
+The board can only prove *no harm* here. The Cora's memory is fed
+`A_full`, so it never had the problem the fix addresses; the proof is the
+threshold measurement and, eventually, the real backplane.
+
+**A wasted round first, worth recording because it is the third board
+result in this log with a mundane cause.** The first five boots came back
+0/5, which looked alarming against a simulation that passed. They were
+run against a bitstream that was *being deleted*: the build had been
+started minutes earlier, a watch fired "BUILD READY" on the **stale
+`.ltx` from the previous build** before Vivado had wiped `impl_1`, and
+`program_prcx18.tcl` was pointed at a `.bit` that no longer existed. The
+giveaways were in `boot_test.sh`'s own output -- `busybox devmem ...:
+Bus error` on the very first ROM write (no AXI BRAM controller in the PL
+at all) and 2000 bytes of `0xFF` from the console.
+
+The readiness check now waits for the Vivado *process to exit* and for
+the bitstream to be newer than the build log, instead of trusting a file
+that merely exists. The pattern across all three: the board told the
+truth, the scaffolding around it lied (unloaded ROM, untimed clocks, and
+now a half-deleted bitstream).

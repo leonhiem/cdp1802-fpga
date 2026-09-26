@@ -194,7 +194,16 @@ BEGIN
                       v.Do_MRD := '1';
                       IF clk_cnt = "000" THEN
                           v.wr_A := '1'; -- R(N) -> A
-                      ELSIF clk_cnt = "010" THEN
+                      -- clk_cnt was "010" here until 2026-09-26. A real
+                      -- memory card only has the COMPLETE address once the
+                      -- LOW byte appears at clk_cnt 3, so capturing at 2
+                      -- gave it a 125 ns window where the real CDP1802
+                      -- gives ~230 ns -- half a clock tighter than a rack
+                      -- that was already designed to just fit a 2764.
+                      -- "100" matches the 21 other memory reads (0xF4 ADD
+                      -- right below is one) and opens it to 625 ns. Found
+                      -- by tb_cdp1802_mux_addr.vhd; see TODO 2.5.
+                      ELSIF clk_cnt = "100" THEN
                           v.wr_D := '1'; -- M(R(N)) -> D
                       END IF;
                   END IF;
@@ -1072,7 +1081,16 @@ BEGIN
                       v.Do_MRD := '1';
                       IF clk_cnt = "000" THEN
                           v.wr_A := '1'; -- R(X) -> A
-                      ELSIF clk_cnt = "010" THEN
+                      -- clk_cnt was "010" here until 2026-09-26. A real
+                      -- memory card only has the COMPLETE address once the
+                      -- LOW byte appears at clk_cnt 3, so capturing at 2
+                      -- gave it a 125 ns window where the real CDP1802
+                      -- gives ~230 ns -- half a clock tighter than a rack
+                      -- that was already designed to just fit a 2764.
+                      -- "100" matches the 21 other memory reads (0xF4 ADD
+                      -- right below is one) and opens it to 625 ns. Found
+                      -- by tb_cdp1802_mux_addr.vhd; see TODO 2.5.
+                      ELSIF clk_cnt = "100" THEN
                           v.wr_D := '1'; -- M(R(X)) -> D
                       END IF;
                   ELSIF N_out = "0001" THEN -- 0xF1 : OR : M(R(X)) OR D -> D
@@ -1082,7 +1100,16 @@ BEGIN
                       v.alu_oper := c_ALU_OR;
                       IF clk_cnt = "000" THEN
                           v.wr_A := '1'; -- R(X) -> A
-                      ELSIF clk_cnt = "010" THEN
+                      -- clk_cnt was "010" here until 2026-09-26. A real
+                      -- memory card only has the COMPLETE address once the
+                      -- LOW byte appears at clk_cnt 3, so capturing at 2
+                      -- gave it a 125 ns window where the real CDP1802
+                      -- gives ~230 ns -- half a clock tighter than a rack
+                      -- that was already designed to just fit a 2764.
+                      -- "100" matches the 21 other memory reads (0xF4 ADD
+                      -- right below is one) and opens it to 625 ns. Found
+                      -- by tb_cdp1802_mux_addr.vhd; see TODO 2.5.
+                      ELSIF clk_cnt = "100" THEN
                           v.wr_D := '1'; -- M(R(X)) -> D
                       END IF;
                   ELSIF N_out = "0010" THEN -- 0xF2 : AND : M(R(X)) AND D -> D
@@ -1092,7 +1119,16 @@ BEGIN
                       v.alu_oper := c_ALU_AND;
                       IF clk_cnt = "000" THEN
                           v.wr_A := '1'; -- R(X) -> A
-                      ELSIF clk_cnt = "010" THEN
+                      -- clk_cnt was "010" here until 2026-09-26. A real
+                      -- memory card only has the COMPLETE address once the
+                      -- LOW byte appears at clk_cnt 3, so capturing at 2
+                      -- gave it a 125 ns window where the real CDP1802
+                      -- gives ~230 ns -- half a clock tighter than a rack
+                      -- that was already designed to just fit a 2764.
+                      -- "100" matches the 21 other memory reads (0xF4 ADD
+                      -- right below is one) and opens it to 625 ns. Found
+                      -- by tb_cdp1802_mux_addr.vhd; see TODO 2.5.
+                      ELSIF clk_cnt = "100" THEN
                           v.wr_D := '1'; -- M(R(X)) -> D
                       END IF;
                   ELSIF N_out = "0011" THEN -- 0xF3 : XOR : M(R(X)) XOR D -> D
@@ -1102,7 +1138,16 @@ BEGIN
                       v.alu_oper := c_ALU_XOR;
                       IF clk_cnt = "000" THEN
                           v.wr_A := '1'; -- R(X) -> A
-                      ELSIF clk_cnt = "010" THEN
+                      -- clk_cnt was "010" here until 2026-09-26. A real
+                      -- memory card only has the COMPLETE address once the
+                      -- LOW byte appears at clk_cnt 3, so capturing at 2
+                      -- gave it a 125 ns window where the real CDP1802
+                      -- gives ~230 ns -- half a clock tighter than a rack
+                      -- that was already designed to just fit a 2764.
+                      -- "100" matches the 21 other memory reads (0xF4 ADD
+                      -- right below is one) and opens it to 625 ns. Found
+                      -- by tb_cdp1802_mux_addr.vhd; see TODO 2.5.
+                      ELSIF clk_cnt = "100" THEN
                           v.wr_D := '1'; -- M(R(X)) -> D
                       END IF;
                   ELSIF N_out = "0100" THEN -- 0xF4 : ADD : M(R(X)) + D -> DF, D
