@@ -901,12 +901,27 @@ second EPROM (macro assembler).
   BRINGUP_LOG.md.
 - Make sure nothing copyrighted or secret is committed (ROM dump,
   schematics, board password): `git ls-files` review.
-- Carry the core fixes back to the original
-  [cdp1802](https://github.com/leonhiem/cdp1802) repo: INP (`instr.vhd`,
-  `eb9d247`), SHRC/SHLC (`alu.vhd` + `instr.vhd` comment, `d82e04a`),
-  no S3 with IE=0 (`control.vhd`), plus the matching
-  `test_program_pkg.vhd` expected-value comments. Check how that repo's
-  own golden references/testbenches change, same as here.
+- **Carry the core fixes back to the original
+  [cdp1802](https://github.com/leonhiem/cdp1802) repo -- done 2026-09-26
+  (`d6406c4`).** All thirteen fixes ported: `alu`, `ff`, `reg`, `reg_R`,
+  `amux`, `dmux`, `control`, `instr`, `cdp1802.vhd`.
+
+  Deliberately *not* carried over, since they are artifacts of this port
+  rather than fixes: the `DATA_IN`/`DATA_OUT`/`DATA_OE` split (FPGA fabric
+  has no internal tri-states -- that repo keeps the datasheet's
+  bidirectional bus, driven from the same signals through one tri-state
+  assignment), `A_full`, the `dbg_*` ports, and `ram.vhd`, whose inline
+  golden test program is the thing the author watches in waveforms.
+
+  Verified rather than assumed: that repo's regenerated reference traces
+  are identical to *this* repo's, for the same two testbenches, except
+  where its bidirectional bus reads `ZZ` and ours reads a driven value --
+  109 and 56 such lines, and **0** differences in address, strobes, Q or
+  SC. Against its own previous traces the changes are a uniform +250 ns
+  after the first line (the 9-clock initialization cycle, bug 11) and the
+  address bus in execute cycles with no memory access (Table 2, bug 4).
+  Its README now names the thirteen in a paragraph and links here for the
+  detail, rather than duplicating it.
 - Tag a release.
 
 ### TODO 5: faster interactive console
