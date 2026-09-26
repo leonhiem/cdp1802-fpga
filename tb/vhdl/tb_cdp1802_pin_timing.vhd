@@ -229,6 +229,15 @@ BEGIN
     -- it too. On the Cora nothing notices -- the memory is RTL and the
     -- testbenches mux the bus -- but on the backplane that is two drivers.
     VARIABLE contend      : INTEGER := 0;   -- phases both drove, this run
+    -- Bus turnaround, the number the level translators' DIR needs and the
+    -- memory's output-disable time has to fit in: how long after nMRD goes
+    -- high does the CPU start driving, and how long after it stops driving
+    -- does nMRD go low again. Counted in phases across the whole run.
+    VARIABLE gap_rd_to_drv : INTEGER := 9999; -- nMRD high -> DATA_OE high
+    VARIABLE gap_drv_to_rd : INTEGER := 9999; -- DATA_OE low -> nMRD low
+    VARIABLE since_mrd_hi  : INTEGER := -1;
+    VARIABLE since_doe_lo  : INTEGER := -1;
+    VARIABLE doe_prev      : STD_LOGIC := '0';
     VARIABLE max_mrd_low  : INTEGER := 0;   -- ... the most seen in any cycle
     VARIABLE min_d_setup  : INTEGER := 999; -- CPU data valid before nMWR rises
     VARIABLE min_d_hold   : INTEGER := 999; -- ... and still valid after
@@ -386,6 +395,21 @@ BEGIN
         END IF;
         IF nmrd = '0' THEN mrd_phases := mrd_phases + 1; END IF;
         IF nmrd = '0' AND cpu_doe = '1' THEN contend := contend + 1; END IF;
+        -- turnaround: memory stops being read -> CPU starts driving
+        IF nmrd = '1' AND mrd_prev = '0' THEN since_mrd_hi := 0;
+        ELSIF since_mrd_hi >= 0 THEN since_mrd_hi := since_mrd_hi + 1; END IF;
+        IF cpu_doe = '1' AND doe_prev = '0' AND since_mrd_hi >= 0
+           AND since_mrd_hi < gap_rd_to_drv THEN
+          gap_rd_to_drv := since_mrd_hi;
+        END IF;
+        -- and back: CPU stops driving -> memory read resumes
+        IF cpu_doe = '0' AND doe_prev = '1' THEN since_doe_lo := 0;
+        ELSIF since_doe_lo >= 0 THEN since_doe_lo := since_doe_lo + 1; END IF;
+        IF nmrd = '0' AND mrd_prev = '1' AND since_doe_lo >= 0
+           AND since_doe_lo < gap_drv_to_rd THEN
+          gap_drv_to_rd := since_doe_lo;
+        END IF;
+        doe_prev := cpu_doe;
         IF nmrd = '0' AND mrd_prev = '1' AND mrd_low < 0 THEN mrd_low := phase; END IF;
         IF nmwr = '0' AND mwr_prev = '1' AND mwr_low < 0 THEN mwr_low := phase; END IF;
         IF nmwr = '1' AND mwr_prev = '0' AND mwr_low >= 0 AND mwr_high < 0 THEN mwr_high := phase; END IF;
@@ -416,6 +440,16 @@ BEGIN
     ELSE
       WRITE(l, STRING'("  no bus contention: nMRD never low while the "));
       WRITE(l, STRING'("CPU drove the bus"));
+      WRITELINE(OUTPUT, l);
+    END IF;
+    IF gap_rd_to_drv < 9999 THEN
+      WRITE(l, STRING'("  bus turnaround, nMRD high -> CPU drives : "));
+      WRITE(l, gap_rd_to_drv * (clk_period / 2));
+      WRITELINE(OUTPUT, l);
+    END IF;
+    IF gap_drv_to_rd < 9999 THEN
+      WRITE(l, STRING'("  bus turnaround, CPU stops -> nMRD low   : "));
+      WRITE(l, gap_drv_to_rd * (clk_period / 2));
       WRITELINE(OUTPUT, l);
     END IF;
     WRITE(l, STRING'("  nMRD low, longest in any cycle   : "));
