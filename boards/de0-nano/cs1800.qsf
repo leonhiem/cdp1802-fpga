@@ -1,0 +1,283 @@
+
+
+set_global_assignment -name FAMILY "Cyclone IV E"
+set_global_assignment -name DEVICE EP4CE22F17C6
+set_global_assignment -name TOP_LEVEL_ENTITY cs1800_cpu
+set_global_assignment -name ORIGINAL_QUARTUS_VERSION 18.1.0
+set_global_assignment -name PROJECT_CREATION_TIME_DATE "21:15:42  MAY 05, 2026"
+set_global_assignment -name LAST_QUARTUS_VERSION "18.1.0 Lite Edition"
+set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
+set_global_assignment -name MIN_CORE_JUNCTION_TEMP 0
+set_global_assignment -name MAX_CORE_JUNCTION_TEMP 85
+set_global_assignment -name ERROR_CHECK_FREQUENCY_DIVISOR 1
+set_global_assignment -name NOMINAL_CORE_SUPPLY_VOLTAGE 1.2V
+set_global_assignment -name EDA_SIMULATION_TOOL "ModelSim-Altera (VHDL)"
+set_global_assignment -name EDA_TIME_SCALE "1 ps" -section_id eda_simulation
+set_global_assignment -name EDA_OUTPUT_DATA_FORMAT VHDL -section_id eda_simulation
+set_global_assignment -name PARTITION_NETLIST_TYPE SOURCE -section_id Top
+set_global_assignment -name PARTITION_FITTER_PRESERVATION_LEVEL PLACEMENT_AND_ROUTING -section_id Top
+set_global_assignment -name PARTITION_COLOR 16764057 -section_id Top
+set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top
+set_global_assignment -name STRATIX_DEVICE_IO_STANDARD "2.5 V"
+set_global_assignment -name SDC_FILE cs1800.sdc
+# set_global_assignment -name VHDL_FILE src/vhdl/reg_R.vhd
+# set_global_assignment -name VHDL_FILE src/vhdl/reg.vhd
+set_global_assignment -name QIP_FILE src/vhdl/pll_sys.qip
+# set_global_assignment -name VHDL_FILE src/vhdl/io_out.vhd
+# set_global_assignment -name VHDL_FILE src/vhdl/io_inp.vhd
+# set_global_assignment -name VHDL_FILE src/vhdl/instr_pkg.vhd
+# set_global_assignment -name VHDL_FILE src/vhdl/instr.vhd
+# set_global_assignment -name VHDL_FILE src/vhdl/ff.vhd
+# set_global_assignment -name VHDL_FILE src/vhdl/dmux.vhd
+# set_global_assignment -name VHDL_FILE src/vhdl/dff.vhd
+# set_global_assignment -name VHDL_FILE src/vhdl/cs1800_cpu.vhd
+# set_global_assignment -name VHDL_FILE src/vhdl/control.vhd
+# set_global_assignment -name VHDL_FILE src/vhdl/cdp1802_pkg.vhd
+# set_global_assignment -name VHDL_FILE src/vhdl/cdp1802.vhd
+# set_global_assignment -name VHDL_FILE src/vhdl/amux.vhd
+# set_global_assignment -name VHDL_FILE src/vhdl/alu.vhd
+set_global_assignment -name SOURCE_FILE db/cs1800.cmp.rdb
+set_global_assignment -name POWER_PRESET_COOLING_SOLUTION "23 MM HEAT SINK WITH 200 LFPM AIRFLOW"
+set_global_assignment -name POWER_BOARD_THERMAL_MODEL "NONE (CONSERVATIVE)"
+
+set_global_assignment -name USE_CONFIGURATION_DEVICE OFF
+set_global_assignment -name CRC_ERROR_OPEN_DRAIN OFF
+set_global_assignment -name RESERVE_DATA0_AFTER_CONFIGURATION "USE AS REGULAR IO"
+set_global_assignment -name RESERVE_DATA1_AFTER_CONFIGURATION "USE AS REGULAR IO"
+set_global_assignment -name RESERVE_FLASH_NCE_AFTER_CONFIGURATION "USE AS REGULAR IO"
+set_global_assignment -name RESERVE_DCLK_AFTER_CONFIGURATION "USE AS REGULAR IO"
+set_global_assignment -name OUTPUT_IO_TIMING_NEAR_END_VMEAS "HALF VCCIO" -rise
+set_global_assignment -name OUTPUT_IO_TIMING_NEAR_END_VMEAS "HALF VCCIO" -fall
+set_global_assignment -name OUTPUT_IO_TIMING_FAR_END_VMEAS "HALF SIGNAL SWING" -rise
+set_global_assignment -name OUTPUT_IO_TIMING_FAR_END_VMEAS "HALF SIGNAL SWING" -fall
+
+
+
+#============================================================
+# Clock on the DE0-nano board:
+#============================================================
+set_location_assignment PIN_R8 -to clk_50
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to clk_50
+
+
+#============================================================
+# EPCS on the DE0-nano board:
+#============================================================
+set_location_assignment PIN_H2 -to EPCS_DATA0
+set_location_assignment PIN_H1 -to EPCS_DCLK
+set_location_assignment PIN_D2 -to EPCS_SCE
+set_location_assignment PIN_C1 -to EPCS_SDO
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to EPCS_DATA0
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to EPCS_DCLK
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to EPCS_SCE
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to EPCS_SDO
+
+#============================================================
+# PIO_LED : on the DE0-nano board inself
+#============================================================
+set_location_assignment PIN_L3 -to led_Q
+set_location_assignment PIN_B1 -to led_fetch
+set_location_assignment PIN_F3 -to led_exec
+set_location_assignment PIN_D1 -to led_dma_ack
+set_location_assignment PIN_A11 -to led_int_ack
+set_location_assignment PIN_B13 -to pio_led[2]
+set_location_assignment PIN_A13 -to pio_led[1]
+set_location_assignment PIN_A15 -to pio_led[0]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to led_Q
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to led_fetch
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to led_exec
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to led_dma_ack
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to led_int_ack
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to pio_led[2]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to pio_led[1]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to pio_led[0]
+set_instance_assignment -name CURRENT_STRENGTH_NEW 8MA -to pio_led[0]
+set_instance_assignment -name CURRENT_STRENGTH_NEW 8MA -to pio_led[1]
+set_instance_assignment -name CURRENT_STRENGTH_NEW 8MA -to pio_led[2]
+set_instance_assignment -name CURRENT_STRENGTH_NEW 8MA -to led_int_ack
+set_instance_assignment -name CURRENT_STRENGTH_NEW 8MA -to led_dma_ack
+set_instance_assignment -name CURRENT_STRENGTH_NEW 8MA -to led_exec
+set_instance_assignment -name CURRENT_STRENGTH_NEW 8MA -to led_fetch
+set_instance_assignment -name CURRENT_STRENGTH_NEW 8MA -to led_Q
+
+
+#============================================================
+# KEY : on the DE0-nano board inself
+#============================================================
+set_location_assignment PIN_J15 -to KEY[0]
+set_location_assignment PIN_E1 -to KEY[1]
+
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to KEY[0]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to KEY[1]
+
+
+#============================================================
+# DIP SWITCH : on the DE0-nano board inself
+#============================================================
+set_location_assignment PIN_M1 -to SW[0]
+set_location_assignment PIN_T8 -to SW[1]
+set_location_assignment PIN_B9 -to SW[2]
+set_location_assignment PIN_M15 -to SW[3]
+
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to SW[0]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to SW[1]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to SW[2]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to SW[3]
+
+
+#============================================================
+# UART0
+#============================================================
+set_location_assignment PIN_T15 -to UART0_RXD
+set_location_assignment PIN_F13 -to UART0_TXD
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to UART0_RXD
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to UART0_TXD
+set_instance_assignment -name CURRENT_STRENGTH_NEW 8MA -to UART0_TXD
+
+#============================================================
+# Connection to the CS1800 backplane
+# gpio0 : JP1 : the 40 pin header which will connect the level shifters (via ribbon cable)
+#============================================================
+
+# LC 50Hz: in
+set_location_assignment PIN_D3 -to LC
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to LC
+
+# nINT: in
+set_location_assignment PIN_C3 -to nINT
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to nINT
+
+# nMWR: out
+set_location_assignment PIN_A2 -to nMWR
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to nMWR
+
+# TPA: out
+set_location_assignment PIN_A3 -to TPA
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to TPA
+
+# nMRD: out
+set_location_assignment PIN_B3 -to nMRD
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to nMRD
+
+# TPB: out
+set_location_assignment PIN_B4 -to TPB
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to TPB
+
+# DATA[7]: inout
+set_location_assignment PIN_A7 -to DATA[7]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to DATA[7]
+
+# DATA[6]: inout
+set_location_assignment PIN_C6 -to DATA[6]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to DATA[6]
+
+# DATA[5]: inout
+set_location_assignment PIN_C8 -to DATA[5]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to DATA[5]
+
+# DATA[4]: inout
+set_location_assignment PIN_E6 -to DATA[4]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to DATA[4]
+
+# DATA[3]: inout
+set_location_assignment PIN_E7 -to DATA[3]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to DATA[3]
+
+# DATA[2]: inout
+set_location_assignment PIN_D8 -to DATA[2]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to DATA[2]
+
+# DATA[1]: inout
+set_location_assignment PIN_E8 -to DATA[1]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to DATA[1]
+
+# DATA[0]: inout
+set_location_assignment PIN_F8 -to DATA[0]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to DATA[0]
+
+# ADDR[7]: out
+set_location_assignment PIN_A4 -to ADDR[7]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to ADDR[7]
+
+# ADDR[6]: out
+set_location_assignment PIN_B5 -to ADDR[6]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to ADDR[6]
+
+# ADDR[5]: out
+set_location_assignment PIN_A5 -to ADDR[5]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to ADDR[5]
+
+# ADDR[4]: out
+set_location_assignment PIN_D5 -to ADDR[4]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to ADDR[4]
+
+# ADDR[3]: out
+set_location_assignment PIN_B6 -to ADDR[3]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to ADDR[3]
+
+# ADDR[2]: out
+set_location_assignment PIN_A6 -to ADDR[2]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to ADDR[2]
+
+# ADDR[1]: out
+set_location_assignment PIN_B7 -to ADDR[1]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to ADDR[1]
+
+# ADDR[0]: out
+set_location_assignment PIN_D6 -to ADDR[0]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to ADDR[0]
+
+# nEF[0]: in
+set_location_assignment PIN_F9 -to nEF[0]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to nEF[0]
+
+# nEF[1]: in
+set_location_assignment PIN_C9 -to nEF[1]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to nEF[1]
+
+# nEF[2]: in
+set_location_assignment PIN_E11 -to nEF[2]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to nEF[2]
+
+# N[2]: out
+set_location_assignment PIN_E9 -to N[2]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to N[2]
+
+# N[1]: out
+set_location_assignment PIN_D9 -to N[1]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to N[1]
+
+# N[0]: out
+set_location_assignment PIN_E10 -to N[0]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to N[0]
+
+# Q: out
+set_location_assignment PIN_C11 -to Q 
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to Q
+
+# DATA_DIR : out : setting the direction of the 8T245 levelshifter of the databus
+# PCB: pull this DOWN. Its safe default is B->A (the backplane drives, we
+# listen); if it floats or defaults high while the FPGA is unconfigured,
+# this module drives the rack's data bus against the real memory.
+set_location_assignment PIN_B11 -to DATA_DIR 
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to DATA_DIR
+
+# DATA_nOE : out : output-enable of the databus 8T245 (active low).
+# Two jobs: keep the transceiver off until the core is running, and give
+# the read->write turnaround a deliberate dead time -- DIR alone cannot do
+# that, it swaps direction without ever turning the driver off.
+# PCB: pull this UP, so "disabled" is the power-on default.
+set_location_assignment PIN_A12 -to DATA_nOE
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to DATA_nOE
+
+# BUF_nOE : out : output-enable of the two outgoing 8T245s (active low),
+# so the backplane sees nothing from this card until the FPGA is
+# configured and the CPU is out of reset. Without it, TPA/TPB/Q sit at
+# whatever the FPGA's weak pull-ups give during configuration.
+# PCB: pull this UP too.
+set_location_assignment PIN_D11 -to BUF_nOE
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to BUF_nOE
+
+
+
+
